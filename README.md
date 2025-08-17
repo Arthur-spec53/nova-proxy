@@ -1,10 +1,10 @@
 # Nova Proxy
 
-[![CI/CD](https://github.com/your-org/nova-proxy/workflows/CI/CD/badge.svg)](https://github.com/your-org/nova-proxy/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/your-org/nova-proxy)](https://goreportcard.com/report/github.com/your-org/nova-proxy)
-[![Coverage Status](https://codecov.io/gh/your-org/nova-proxy/branch/main/graph/badge.svg)](https://codecov.io/gh/your-org/nova-proxy)
+[![CI/CD](https://github.com/Arthur-spec53/nova-proxy/workflows/CI/CD/badge.svg)](https://github.com/Arthur-spec53/nova-proxy/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Arthur-spec53/nova-proxy)](https://goreportcard.com/report/github.com/Arthur-spec53/nova-proxy)
+[![Coverage Status](https://codecov.io/gh/Arthur-spec53/nova-proxy/branch/main/graph/badge.svg)](https://codecov.io/gh/Arthur-spec53/nova-proxy)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Docker Pulls](https://img.shields.io/docker/pulls/your-org/nova-proxy.svg)](https://hub.docker.com/r/your-org/nova-proxy)
+[![Docker Pulls](https://img.shields.io/docker/pulls/arthur-spec53/nova-proxy.svg)](https://hub.docker.com/r/arthur-spec53/nova-proxy)
 
 🚀 **Nova Proxy** 是一个高性能、企业级的现代代理服务器，基于 **ASTAT (自适应塑形传输与加密QUIC)** 协议构建。专为云原生环境设计，支持 HTTP/1.1、HTTP/2 和 HTTP/3 (QUIC) 协议，提供负载均衡、SSL/TLS 终止、缓存、监控和安全防护等功能。
 
@@ -84,7 +84,7 @@
 
 ```bash
 # 克隆项目
-git clone https://github.com/your-org/nova-proxy.git
+git clone https://github.com/Arthur-spec53/nova-proxy.git
 cd nova-proxy
 
 # 安装依赖
@@ -509,10 +509,10 @@ iperf3 -c server-ip -p 8443 --quic
 
 ## 📞 支持
 
-- 📧 Email: support@nova-proxy.io
-- 💬 Slack: [#nova-proxy](https://nova-proxy.slack.com)
-- 🐛 Issues: [GitHub Issues](https://github.com/your-org/nova-proxy/issues)
-- 📖 文档: [https://docs.nova-proxy.io](https://docs.nova-proxy.io)
+- 📧 Email: arthur-spec53@haoxicloud.top
+- 💬 GitHub: [Arthur-spec53](https://github.com/Arthur-spec53)
+- 🐛 Issues: [GitHub Issues](https://github.com/Arthur-spec53/nova-proxy/issues)
+- 📖 文档: [项目文档](https://github.com/Arthur-spec53/nova-proxy/wiki)
 
 ---
 
