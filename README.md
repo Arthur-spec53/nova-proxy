@@ -446,34 +446,43 @@ export GOGC=100
 
 ## 📈 性能基准
 
-### 测试环境
-- CPU: Intel Xeon E5-2686 v4 (8 cores)
-- Memory: 16GB RAM
-- Network: 10Gbps
-- OS: Ubuntu 22.04 LTS
+### 测试说明
 
-### ASTAT 协议性能
+本项目提供了完整的性能测试框架，包括基准测试、压力测试和性能分析工具。实际性能表现会根据硬件配置、网络环境和负载情况而有所不同。
 
-| 指标 | 值 | 说明 |
-|------|----|---------|
-| 连接建立时间 | <10ms | 0-RTT 优化 |
-| 吞吐量 | 8Gbps | 单连接最大 |
-| 并发连接 | 10,000+ | 服务端支持 |
-| 延迟增加 | <2ms | 相比原始 QUIC |
-| CPU 开销 | +15% | 加密和塑形 |
+### 性能测试工具
 
-### 压力测试
+项目包含以下性能测试组件：
+
+- **基准测试**: `test/performance/performance_test.go` - Go 基准测试套件
+- **压力测试脚本**: `scripts/performance.sh` - 自动化性能测试工具
+- **监控工具**: 支持 Prometheus 指标收集和性能监控
+
+### 运行性能测试
 
 ```bash
-# SOCKS5 代理测试
+# 运行 Go 基准测试
+go test -bench=. ./test/performance/
+
+# 使用性能测试脚本
+./scripts/performance.sh --benchmark
+
+# SOCKS5 代理功能测试
 curl --socks5 127.0.0.1:1080 http://httpbin.org/ip
 
 # 并发连接测试
-./scripts/test/concurrent-test.sh --connections 1000
-
-# 带宽测试
-iperf3 -c server-ip -p 8443 --quic
+./scripts/performance.sh --load-test --connections 100
 ```
+
+### 性能优化特性
+
+- **ASTAT 协议优化**: 基于 QUIC 的增强传输协议
+- **多路径支持**: MP-QUIC 实现提升网络利用率
+- **智能流量塑形**: 自适应带宽管理
+- **连接复用**: 减少连接建立开销
+- **0-RTT 连接**: 支持快速连接恢复
+
+> **注意**: 具体性能数据请通过实际测试获得。不同环境下的表现可能存在显著差异。
 
 ## 🤝 贡献指南
 
