@@ -1,0 +1,537 @@
+# Nova Proxy Staging 环境配置
+# 继承默认 values.yaml 并覆盖特定配置
+
+# 全局配置
+global:
+  environment: staging
+  imageRegistry: registry.nova-proxy.com
+  storageClass: fast-ssd
+  networkPolicy:
+    enabled: true
+  serviceMesh:
+    enabled: false
+
+# 镜像配置
+image:
+  repository: registry.nova-proxy.com/nova-proxy
+  tag: "develop-latest"
+  pullPolicy: Always
+  pullSecrets:
+    - name: registry-secret
+
+# 部署配置
+replicaCount: 3
+
+deployment:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    config.linkerd.io/proxy-cpu-request: "100m"
+    config.linkerd.io/proxy-memory-request: "128Mi"
+  
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    linkerd.io/inject: enabled
+  
+  nodeSelector:
+    node-type: compute
+    environment: staging
+  
+  tolerations:
+    - key: "staging"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+  
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - nova-proxy
+          topologyKey: kubernetes.io/hostname
+
+# 容器配置
+container:
+  ports:
+    quic: 8443
+    https: 8080
+    health: 8081
+    metrics: 9090
+    pprof: 6060
+  
+  env:
+    NOVA_ENV: staging
+    NOVA_LOG_LEVEL: debug
+    NOVA_DEBUG: "true"
+    NOVA_HOT_RELOAD: "true"
+    NOVA_PPROF_ENABLED: "true"
+    NOVA_PERFORMANCE_MODE: "false"
+    NOVA_SECURITY_HARDENED: "true"
+  
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+      ephemeral-storage: "1Gi"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+      ephemeral-storage: "5Gi"
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    capabilities:
+      drop:
+      - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+# 健康检查配置
+healthcheck:
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /ready
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+  
+  startupProbe:
+    enabled: true
+    httpGet:
+      path: /startup
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+    successThreshold: 1
+
+# 服务配置
+service:
+  type: ClusterIP
+  ports:
+    quic:
+      port: 8443
+      targetPort: 8443
+      protocol: UDP
+    https:
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    health:
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+    metrics:
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+
+# Ingress 配置
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://staging-admin.nova-proxy.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+  
+  hosts:
+    - host: staging.nova-proxy.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service:
+            name: nova-proxy
+            port:
+              number: 8080
+  
+  tls:
+    - secretName: nova-proxy-staging-tls
+      hosts:
+        - staging.nova-proxy.com
+
+# 自动扩缩容配置
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+      - type: Pods
+        value: 4
+        periodSeconds: 60
+      selectPolicy: Max
+
+# 垂直自动扩缩容
+verticalAutoscaling:
+  enabled: false
+  updateMode: "Off"
+  minAllowed:
+    cpu: 100m
+    memory: 128Mi
+  maxAllowed:
+    cpu: 2
+    memory: 4Gi
+
+# 持久化存储
+persistence:
+  enabled: true
+  storageClass: fast-ssd
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  
+  logs:
+    enabled: true
+    size: 5Gi
+    storageClass: standard
+  
+  cache:
+    enabled: true
+    size: 2Gi
+    storageClass: fast-ssd
+  
+  temp:
+    enabled: true
+    size: 1Gi
+    storageClass: fast-ssd
+
+# 配置管理
+configMap:
+  data:
+    nova-proxy.yaml: |
+      server:
+        listen_addr: "0.0.0.0:8080"
+        quic_addr: "0.0.0.0:8443"
+        tls:
+          cert_file: "/etc/tls/tls.crt"
+          key_file: "/etc/tls/tls.key"
+          min_version: "1.2"
+          max_version: "1.3"
+        quic:
+          max_streams: 1000
+          max_connections: 10000
+          idle_timeout: "30s"
+          keep_alive: "15s"
+      
+      proxy:
+        upstreams:
+          - name: "staging-backend"
+            addresses:
+              - "staging-backend-1.internal:8080"
+              - "staging-backend-2.internal:8080"
+            load_balancer: "round_robin"
+            health_check:
+              enabled: true
+              path: "/health"
+              interval: "10s"
+              timeout: "5s"
+              healthy_threshold: 2
+              unhealthy_threshold: 3
+        
+        timeout:
+          connect: "10s"
+          read: "30s"
+          write: "30s"
+          idle: "60s"
+        
+        retry:
+          max_attempts: 3
+          backoff: "exponential"
+          initial_interval: "1s"
+          max_interval: "10s"
+      
+      logging:
+        level: "debug"
+        format: "json"
+        output: "stdout"
+        rotation:
+          enabled: true
+          max_size: "100MB"
+          max_age: "7d"
+          max_backups: 10
+        sanitization:
+          enabled: true
+          fields:
+            - "password"
+            - "token"
+            - "authorization"
+      
+      monitoring:
+        prometheus:
+          enabled: true
+          path: "/metrics"
+          port: 9090
+        
+        tracing:
+          enabled: true
+          jaeger:
+            endpoint: "http://jaeger-collector.monitoring:14268/api/traces"
+            service_name: "nova-proxy-staging"
+            sampler_type: "probabilistic"
+            sampler_param: 0.1
+        
+        health:
+          enabled: true
+          path: "/health"
+          port: 8081
+      
+      security:
+        rate_limiting:
+          enabled: true
+          requests_per_second: 1000
+          burst: 2000
+          cleanup_interval: "1m"
+        
+        cors:
+          enabled: true
+          allowed_origins:
+            - "https://staging-admin.nova-proxy.com"
+          allowed_methods:
+            - "GET"
+            - "POST"
+            - "PUT"
+            - "DELETE"
+            - "OPTIONS"
+          allowed_headers:
+            - "Content-Type"
+            - "Authorization"
+            - "X-Requested-With"
+          max_age: "86400"
+      
+      performance:
+        connection_pool:
+          max_idle_conns: 100
+          max_idle_conns_per_host: 10
+          idle_conn_timeout: "90s"
+        
+        cache:
+          enabled: true
+          ttl: "5m"
+          max_size: "100MB"
+          cleanup_interval: "10m"
+
+# Secret 配置
+secret:
+  data:
+    database_url: "cG9zdGdyZXNxbDovL3VzZXI6cGFzc0BzdGFnaW5nLWRiOjU0MzIvbm92YV9wcm94eQ=="  # postgresql://user:pass@staging-db:5432/nova_proxy
+    redis_url: "cmVkaXM6Ly9zdGFnaW5nLXJlZGlzOjYzNzk="  # redis://staging-redis:6379
+    jwt_secret: "c3RhZ2luZy1qd3Qtc2VjcmV0LWtleQ=="  # staging-jwt-secret-key
+    api_key: "c3RhZ2luZy1hcGkta2V5LTEyMzQ1Ng=="  # staging-api-key-123456
+
+# TLS 配置
+tls:
+  enabled: true
+  autoGenerate: false
+  secretName: nova-proxy-staging-tls
+  certManager:
+    enabled: true
+    issuer: letsencrypt-staging
+    dnsNames:
+      - staging.nova-proxy.com
+
+# 监控配置
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+    scrapeInterval: 30s
+    scrapeTimeout: 10s
+  
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+    interval: 30s
+    scrapeTimeout: 10s
+  
+  prometheusRule:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+
+# 追踪配置
+tracing:
+  enabled: true
+  jaeger:
+    endpoint: http://jaeger-collector.monitoring:14268/api/traces
+    serviceName: nova-proxy-staging
+    samplerType: probabilistic
+    samplerParam: 0.1
+
+# 调试配置
+debugging:
+  pprof:
+    enabled: true
+    port: 6060
+  
+  hotReload:
+    enabled: true
+
+# 数据库配置
+database:
+  enabled: true
+  host: staging-postgres.database
+  port: 5432
+  name: nova_proxy
+  user: nova_proxy
+  sslMode: require
+  maxOpenConns: 25
+  maxIdleConns: 5
+  connMaxLifetime: 300s
+
+# Redis 配置
+redis:
+  enabled: true
+  host: staging-redis.cache
+  port: 6379
+  database: 0
+  maxRetries: 3
+  poolSize: 10
+  minIdleConns: 5
+  dialTimeout: 5s
+  readTimeout: 3s
+  writeTimeout: 3s
+  poolTimeout: 4s
+  idleTimeout: 300s
+
+# 安全配置
+security:
+  networkPolicy:
+    enabled: true
+    ingress:
+      allowFromIngressController: true
+      allowFromSameNamespace: true
+      allowFromMonitoring: true
+      allowHealthCheck: true
+      ingressControllerNamespace: ingress-nginx
+      monitoringNamespace: monitoring
+    egress:
+      allowDNS: true
+      allowUpstreams: true
+      allowDatabase: true
+      allowRedis: true
+      allowHTTPS: true
+      allowHTTP: false
+      allowKubernetesAPI: true
+  
+  podSecurityPolicy:
+    enabled: true
+  
+  rbac:
+    enabled: true
+    serviceAccount:
+      create: true
+      name: nova-proxy-staging
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/nova-proxy-staging
+
+# 代理配置
+proxy:
+  upstreams:
+    - name: staging-backend
+      addresses:
+        - staging-backend-1.internal:8080
+        - staging-backend-2.internal:8080
+      loadBalancer: round_robin
+      healthCheck:
+        enabled: true
+        path: /health
+        interval: 10s
+        timeout: 5s
+        healthyThreshold: 2
+        unhealthyThreshold: 3
+  
+  timeout:
+    connect: 10s
+    read: 30s
+    write: 30s
+    idle: 60s
+  
+  retry:
+    maxAttempts: 3
+    backoff: exponential
+    initialInterval: 1s
+    maxInterval: 10s
+
+# 额外配置
+extra:
+  labels:
+    environment: staging
+    team: platform
+    cost-center: engineering
+  
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    meta.helm.sh/release-name: nova-proxy-staging
+    meta.helm.sh/release-namespace: nova-proxy-staging

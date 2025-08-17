@@ -1,0 +1,451 @@
+# Nova Proxy 生产环境配置
+# 使用方法: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Nova Proxy 服务器 - 生产配置
+  # ============================================================================
+  nova-server:
+    image: ${REGISTRY:-ghcr.io}/nova-proxy/server:${VERSION:-latest}
+    deploy:
+      replicas: 3
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        order: start-first
+      rollback_config:
+        parallelism: 1
+        delay: 5s
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    environment:
+      - NOVA_LOG_LEVEL=info
+      - NOVA_METRICS_ENABLED=true
+      - NOVA_HEALTH_CHECK_ENABLED=true
+      - NOVA_PRODUCTION=true
+      - GOMAXPROCS=2
+      - GOGC=100
+      - GOMEMLIMIT=900MiB
+    volumes:
+      - /etc/nova/configs:/app/configs:ro
+      - /etc/nova/certs:/app/certs:ro
+      - nova-logs:/app/logs
+    networks:
+      - nova-network
+      - traefik-public
+    healthcheck:
+      test: ["/app/bin/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.nova-server.rule=Host(`${NOVA_DOMAIN:-nova.example.com}`)"
+      - "traefik.http.routers.nova-server.tls=true"
+      - "traefik.http.routers.nova-server.tls.certresolver=letsencrypt"
+      - "traefik.http.services.nova-server.loadbalancer.server.port=8080"
+      - "traefik.http.middlewares.nova-server-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.routers.nova-server.middlewares=nova-server-auth"
+
+  # ============================================================================
+  # Prometheus - 生产配置
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    volumes:
+      - /etc/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=50GB'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--web.external-url=https://${PROMETHEUS_DOMAIN:-prometheus.example.com}'
+    networks:
+      - nova-network
+      - traefik-public
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.prometheus.rule=Host(`${PROMETHEUS_DOMAIN:-prometheus.example.com}`)"
+      - "traefik.http.routers.prometheus.tls=true"
+      - "traefik.http.routers.prometheus.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.prometheus-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.routers.prometheus.middlewares=prometheus-auth"
+
+  # ============================================================================
+  # Grafana - 生产配置
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.0.0
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    volumes:
+      - /etc/grafana:/etc/grafana:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=https://${GRAFANA_DOMAIN:-grafana.example.com}
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SECURITY_COOKIE_SAMESITE=strict
+      - GF_SECURITY_STRICT_TRANSPORT_SECURITY=true
+      - GF_SECURITY_CONTENT_TYPE_PROTECTION=true
+      - GF_SECURITY_X_CONTENT_TYPE_OPTIONS=true
+      - GF_SECURITY_X_XSS_PROTECTION=true
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel,grafana-worldmap-panel
+    networks:
+      - nova-network
+      - traefik-public
+    depends_on:
+      - prometheus
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.grafana.rule=Host(`${GRAFANA_DOMAIN:-grafana.example.com}`)"
+      - "traefik.http.routers.grafana.tls=true"
+      - "traefik.http.routers.grafana.tls.certresolver=letsencrypt"
+
+  # ============================================================================
+  # Jaeger - 生产配置
+  # ============================================================================
+  jaeger:
+    image: jaegertracing/all-in-one:1.47
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+      - SPAN_STORAGE_TYPE=elasticsearch
+      - ES_SERVER_URLS=http://elasticsearch:9200
+      - ES_USERNAME=${ELASTICSEARCH_USERNAME}
+      - ES_PASSWORD=${ELASTICSEARCH_PASSWORD}
+    networks:
+      - nova-network
+      - traefik-public
+    depends_on:
+      - elasticsearch
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.jaeger.rule=Host(`${JAEGER_DOMAIN:-jaeger.example.com}`)"
+      - "traefik.http.routers.jaeger.tls=true"
+      - "traefik.http.routers.jaeger.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.jaeger-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.routers.jaeger.middlewares=jaeger-auth"
+
+  # ============================================================================
+  # Elasticsearch - 用于 Jaeger 存储
+  # ============================================================================
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.8.0
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTICSEARCH_PASSWORD}
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - nova-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  # ============================================================================
+  # Redis - 生产配置
+  # ============================================================================
+  redis:
+    image: redis:7-alpine
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    volumes:
+      - redis-data:/data
+      - /etc/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - nova-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================================================
+  # Nginx - 生产负载均衡器
+  # ============================================================================
+  nginx:
+    image: nginx:1.25-alpine
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    volumes:
+      - /etc/nginx:/etc/nginx:ro
+      - /var/log/nginx:/var/log/nginx
+    networks:
+      - nova-network
+      - traefik-public
+    depends_on:
+      - nova-server
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.nginx.rule=Host(`${NGINX_DOMAIN:-lb.example.com}`)"
+      - "traefik.http.routers.nginx.tls=true"
+      - "traefik.http.routers.nginx.tls.certresolver=letsencrypt"
+
+  # ============================================================================
+  # 日志聚合 - Loki
+  # ============================================================================
+  loki:
+    image: grafana/loki:2.8.0
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    volumes:
+      - /etc/loki:/etc/loki:ro
+      - loki-data:/tmp/loki
+    command: -config.file=/etc/loki/loki.yml
+    networks:
+      - nova-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================================
+  # 日志收集 - Promtail
+  # ============================================================================
+  promtail:
+    image: grafana/promtail:2.8.0
+    deploy:
+      mode: global
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    volumes:
+      - /etc/promtail:/etc/promtail:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - nova-logs:/var/log/nova:ro
+    command: -config.file=/etc/promtail/promtail.yml
+    networks:
+      - nova-network
+    depends_on:
+      - loki
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================================
+  # 告警管理 - Alertmanager
+  # ============================================================================
+  alertmanager:
+    image: prom/alertmanager:v0.25.0
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    volumes:
+      - /etc/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=https://${ALERTMANAGER_DOMAIN:-alerts.example.com}'
+    networks:
+      - nova-network
+      - traefik-public
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik-public"
+      - "traefik.http.routers.alertmanager.rule=Host(`${ALERTMANAGER_DOMAIN:-alerts.example.com}`)"
+      - "traefik.http.routers.alertmanager.tls=true"
+      - "traefik.http.routers.alertmanager.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.alertmanager-auth.basicauth.users=${BASIC_AUTH_USERS}"
+      - "traefik.http.routers.alertmanager.middlewares=alertmanager-auth"
+
+# ============================================================================
+# 生产环境网络
+# ============================================================================
+networks:
+  nova-network:
+    driver: overlay
+    attachable: true
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+  traefik-public:
+    external: true
+
+# ============================================================================
+# 生产环境数据卷
+# ============================================================================
+volumes:
+  nova-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/nova
+  prometheus-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/prometheus
+  grafana-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/grafana
+  elasticsearch-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/elasticsearch
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/redis
+  loki-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/loki
+  alertmanager-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/alertmanager

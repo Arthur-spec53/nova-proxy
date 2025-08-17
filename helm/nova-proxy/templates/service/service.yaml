@@ -1,0 +1,182 @@
+{{/*
+Nova Proxy Service 模板
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.service.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerIP }}
+  loadBalancerIP: {{ .Values.service.loadBalancerIP }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "LoadBalancer") .Values.service.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+    {{- range .Values.service.loadBalancerSourceRanges }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- if and (eq .Values.service.type "ClusterIP") .Values.service.clusterIP }}
+  clusterIP: {{ .Values.service.clusterIP }}
+  {{- end }}
+  {{- if .Values.service.externalIPs }}
+  externalIPs:
+    {{- range .Values.service.externalIPs }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinity }}
+  sessionAffinity: {{ .Values.service.sessionAffinity }}
+  {{- end }}
+  {{- if .Values.service.sessionAffinityConfig }}
+  sessionAffinityConfig:
+    {{- toYaml .Values.service.sessionAffinityConfig | nindent 4 }}
+  {{- end }}
+  ports:
+  - name: quic
+    port: {{ .Values.service.ports.quic | default 8443 }}
+    targetPort: {{ .Values.container.ports.quic | default 8443 }}
+    protocol: UDP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.quic }}
+    nodePort: {{ .Values.service.nodePorts.quic }}
+    {{- end }}
+  - name: https
+    port: {{ .Values.service.ports.https | default 8080 }}
+    targetPort: {{ .Values.container.ports.https | default 8080 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.https }}
+    nodePort: {{ .Values.service.nodePorts.https }}
+    {{- end }}
+  - name: health
+    port: {{ .Values.service.ports.health | default 8081 }}
+    targetPort: {{ .Values.container.ports.health | default 8081 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.health }}
+    nodePort: {{ .Values.service.nodePorts.health }}
+    {{- end }}
+  {{- if .Values.monitoring.enabled }}
+  - name: metrics
+    port: {{ .Values.service.ports.metrics | default 9090 }}
+    targetPort: {{ .Values.container.ports.metrics | default 9090 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.metrics }}
+    nodePort: {{ .Values.service.nodePorts.metrics }}
+    {{- end }}
+  {{- end }}
+  {{- if .Values.debugging.pprof.enabled }}
+  - name: pprof
+    port: {{ .Values.service.ports.pprof | default 6060 }}
+    targetPort: {{ .Values.container.ports.pprof | default 6060 }}
+    protocol: TCP
+    {{- if and (or (eq .Values.service.type "NodePort") (eq .Values.service.type "LoadBalancer")) .Values.service.nodePorts.pprof }}
+    nodePort: {{ .Values.service.nodePorts.pprof }}
+    {{- end }}
+  {{- end }}
+  {{- with .Values.service.extraPorts }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+  selector:
+    {{- include "nova-proxy.selectorLabels" . | nindent 4 }}
+
+---
+{{/*
+Nova Proxy Headless Service 模板
+用于 StatefulSet 或需要直接访问 Pod 的场景
+*/}}
+{{- if .Values.service.headless.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-headless
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    service-type: headless
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.service.headless.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: {{ .Values.service.headless.publishNotReadyAddresses | default false }}
+  ports:
+  - name: quic
+    port: {{ .Values.container.ports.quic | default 8443 }}
+    targetPort: {{ .Values.container.ports.quic | default 8443 }}
+    protocol: UDP
+  - name: https
+    port: {{ .Values.container.ports.https | default 8080 }}
+    targetPort: {{ .Values.container.ports.https | default 8080 }}
+    protocol: TCP
+  - name: health
+    port: {{ .Values.container.ports.health | default 8081 }}
+    targetPort: {{ .Values.container.ports.health | default 8081 }}
+    protocol: TCP
+  {{- if .Values.monitoring.enabled }}
+  - name: metrics
+    port: {{ .Values.container.ports.metrics | default 9090 }}
+    targetPort: {{ .Values.container.ports.metrics | default 9090 }}
+    protocol: TCP
+  {{- end }}
+  selector:
+    {{- include "nova-proxy.selectorLabels" . | nindent 4 }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy Internal Service 模板
+用于内部服务间通信
+*/}}
+{{- if .Values.service.internal.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-internal
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    service-type: internal
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.service.internal.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  type: ClusterIP
+  ports:
+  - name: internal
+    port: {{ .Values.service.internal.port | default 8082 }}
+    targetPort: {{ .Values.container.ports.internal | default 8082 }}
+    protocol: TCP
+  - name: grpc
+    port: {{ .Values.service.internal.grpcPort | default 9000 }}
+    targetPort: {{ .Values.container.ports.grpc | default 9000 }}
+    protocol: TCP
+  selector:
+    {{- include "nova-proxy.selectorLabels" . | nindent 4 }}
+{{- end }}

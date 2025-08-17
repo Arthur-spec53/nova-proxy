@@ -1,0 +1,183 @@
+# Nova Proxy Kubernetes 部署配置
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: server
+    version: v1.0.0
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: nova-proxy
+      component: server
+  template:
+    metadata:
+      labels:
+        app: nova-proxy
+        component: server
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: nova-proxy
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: nova-proxy
+        image: nova-proxy:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - name: quic
+          containerPort: 8080
+          protocol: UDP
+        - name: https
+          containerPort: 8443
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+        env:
+        - name: NOVA_CONFIG_PATH
+          value: "/app/configs"
+        - name: NOVA_LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: nova-proxy-config
+              key: log-level
+        - name: NOVA_METRICS_ENABLED
+          value: "true"
+        - name: NOVA_HEALTH_CHECK_ENABLED
+          value: "true"
+        - name: GOMAXPROCS
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.cpu
+        - name: GOGC
+          value: "100"
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        - name: profiles
+          mountPath: /app/profiles
+          readOnly: true
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+        - name: logs
+          mountPath: /app/logs
+        - name: data
+          mountPath: /app/data
+        - name: tmp
+          mountPath: /tmp/nova
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: health
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health
+            port: health
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: config
+        configMap:
+          name: nova-proxy-config
+      - name: profiles
+        configMap:
+          name: nova-proxy-profiles
+      - name: certs
+        secret:
+          secretName: nova-proxy-certs
+      - name: logs
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: data
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: tmp
+        emptyDir:
+          sizeLimit: 100Mi
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nova-proxy
+              topologyKey: kubernetes.io/hostname
+      tolerations:
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always

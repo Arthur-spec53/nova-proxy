@@ -1,0 +1,169 @@
+# Nova Proxy 预发布环境 Kustomization 配置
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 基础配置
+resources:
+- ../../base/deployment.yaml
+- ../../base/service.yaml
+- ../../base/configmap.yaml
+- ../../base/secret.yaml
+- ../../base/rbac.yaml
+- ../../base/ingress.yaml
+- ../../base/hpa.yaml
+- ../../monitoring/prometheus.yaml
+- ../../monitoring/grafana.yaml
+- ../../security/network-policy.yaml
+- canary-deployment.yaml
+- load-test-job.yaml
+
+# 命名空间
+namespace: nova-proxy-staging
+
+# 通用标签
+commonLabels:
+  environment: staging
+  version: v1.0.0-rc
+  team: nova-proxy
+  tier: staging
+
+# 通用注解
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: nova-proxy-system
+  contact.email: staging@nova-proxy.com
+  runbook.url: https://runbooks.nova-proxy.com/staging
+
+# 名称前缀
+namePrefix: staging-
+
+# 镜像替换
+images:
+- name: nova-proxy
+  newName: registry.nova-proxy.com/nova-proxy
+  newTag: v1.0.0-rc.1
+- name: prom/prometheus
+  newName: registry.nova-proxy.com/prometheus
+  newTag: v2.45.0
+- name: grafana/grafana
+  newName: registry.nova-proxy.com/grafana
+  newTag: 10.0.0
+
+# 配置补丁
+patchesStrategicMerge:
+- deployment-patch.yaml
+- service-patch.yaml
+- configmap-patch.yaml
+- ingress-patch.yaml
+- hpa-patch.yaml
+
+# JSON 补丁
+patchesJson6902:
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: nova-proxy
+  path: deployment-staging-patch.yaml
+- target:
+    group: v1
+    kind: Service
+    name: nova-proxy
+  path: service-staging-patch.yaml
+
+# 副本数配置
+replicas:
+- name: nova-proxy
+  count: 3  # 预发布环境中等规模
+- name: prometheus
+  count: 1  # 单实例监控
+- name: grafana
+  count: 1  # 单实例可视化
+
+# 配置生成器
+configMapGenerator:
+- name: nova-proxy-staging-config
+  literals:
+  - log-level=debug
+  - metrics-enabled=true
+  - debug-mode=true
+  - hot-reload=true
+  - performance-mode=false
+  - security-hardened=true
+  - load-test-enabled=true
+  - canary-enabled=true
+  files:
+  - staging-config.yaml
+  - load-test-config.yaml
+  - canary-config.yaml
+
+# 密钥生成器
+secretGenerator:
+- name: nova-proxy-staging-secrets
+  literals:
+  - environment=staging
+  - load-test-token=staging-load-test-token
+  files:
+  - tls.crt=certs/staging-tls.crt
+  - tls.key=certs/staging-tls.key
+  - ca.crt=certs/staging-ca.crt
+  type: kubernetes.io/tls
+
+# 变量替换
+vars:
+- name: ENVIRONMENT
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.environment
+- name: CANARY_ENABLED
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-staging-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.canary-enabled
+- name: LOAD_TEST_ENABLED
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-staging-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.load-test-enabled
+
+# 资源转换器
+transformers:
+- ../../transformers/add-staging-labels.yaml
+- ../../transformers/canary-deployment.yaml
+- ../../transformers/load-testing.yaml
+
+# 生成器选项
+generatorOptions:
+  disableNameSuffixHash: false  # 预发布环境使用哈希后缀
+  labels:
+    environment: staging
+    security.level: medium
+    monitoring.enabled: "true"
+    testing.enabled: "true"
+    canary.enabled: "true"
+  annotations:
+    config.kubernetes.io/local-config: "false"
+    testing.kubernetes.io/load-test: "true"
+    deployment.kubernetes.io/canary: "true"
+
+# 构建元数据
+buildMetadata:
+- buildDate
+- gitCommit
+- gitTreeState
+- gitVersion
+
+# 组件配置
+components:
+- ../../components/monitoring
+- ../../components/testing
+- ../../components/canary
+- ../../components/load-testing

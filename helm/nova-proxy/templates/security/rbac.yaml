@@ -1,0 +1,421 @@
+{{/*
+Nova Proxy RBAC 模板
+*/}}
+{{- if .Values.rbac.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "nova-proxy.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.rbac.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+automountServiceAccountToken: {{ .Values.rbac.serviceAccount.automountServiceAccountToken | default false }}
+{{- if .Values.rbac.serviceAccount.imagePullSecrets }}
+imagePullSecrets:
+  {{- range .Values.rbac.serviceAccount.imagePullSecrets }}
+  - name: {{ . }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+ClusterRole 定义
+*/}}
+{{- if .Values.rbac.clusterRole.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.rbac.clusterRole.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+# 基础权限
+- apiGroups: [""]
+  resources: ["pods", "services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+
+# 配置管理权限
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+
+# 事件记录权限
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+# 节点信息权限（用于多路径选择）
+{{- if .Values.rbac.permissions.nodes }}
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+{{- end }}
+
+# Ingress 权限（如果需要动态路由）
+{{- if .Values.rbac.permissions.ingress }}
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+{{- end }}
+
+# 网络策略权限
+{{- if .Values.rbac.permissions.networkPolicies }}
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "watch"]
+{{- end }}
+
+# 自定义资源权限
+{{- if .Values.rbac.permissions.customResources }}
+- apiGroups: ["nova-proxy.com"]
+  resources: ["proxyrules", "upstreams", "loadbalancers"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+{{- end }}
+
+# 监控权限
+{{- if .Values.monitoring.enabled }}
+- apiGroups: [""]
+  resources: ["pods/metrics"]
+  verbs: ["get"]
+{{- end }}
+
+# 自定义权限规则
+{{- with .Values.rbac.clusterRole.rules }}
+{{- toYaml . | nindent 0 }}
+{{- end }}
+{{- end }}
+
+---
+{{/*
+Role 定义（命名空间级别权限）
+*/}}
+{{- if .Values.rbac.role.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.rbac.role.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+# 配置管理权限
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+  resourceNames: ["{{ include "nova-proxy.configMapName" . }}"]
+
+# Secret 管理权限
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+  resourceNames: ["{{ include "nova-proxy.secretName" . }}"]
+
+# Pod 管理权限
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+# 服务管理权限
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["get", "list", "watch"]
+
+# 端点管理权限
+- apiGroups: [""]
+  resources: ["endpoints"]
+  verbs: ["get", "list", "watch"]
+
+# 事件记录权限
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+# 持久化卷权限
+{{- if .Values.storage.enabled }}
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list", "watch"]
+{{- end }}
+
+# 自定义权限规则
+{{- with .Values.rbac.role.rules }}
+{{- toYaml . | nindent 0 }}
+{{- end }}
+{{- end }}
+
+---
+{{/*
+ClusterRoleBinding 定义
+*/}}
+{{- if .Values.rbac.clusterRole.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.rbac.clusterRoleBinding.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "nova-proxy.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "nova-proxy.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+{{- end }}
+
+---
+{{/*
+RoleBinding 定义
+*/}}
+{{- if .Values.rbac.role.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.rbac.roleBinding.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "nova-proxy.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "nova-proxy.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+{{- end }}
+{{- end }}
+
+---
+{{/*
+PodSecurityPolicy 定义（如果启用）
+*/}}
+{{- if .Values.security.podSecurityPolicy.enabled }}
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    # 默认的 AppArmor 配置
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
+    # 默认的 seccomp 配置
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    {{- with .Values.security.podSecurityPolicy.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # 特权设置
+  privileged: {{ .Values.security.podSecurityPolicy.privileged | default false }}
+  allowPrivilegeEscalation: {{ .Values.security.podSecurityPolicy.allowPrivilegeEscalation | default false }}
+  
+  # 必需的安全上下文
+  requiredDropCapabilities:
+    - ALL
+  
+  # 允许的能力
+  {{- if .Values.security.podSecurityPolicy.allowedCapabilities }}
+  allowedCapabilities:
+    {{- range .Values.security.podSecurityPolicy.allowedCapabilities }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  
+  # 卷类型
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+    {{- if .Values.security.podSecurityPolicy.allowedVolumes }}
+    {{- range .Values.security.podSecurityPolicy.allowedVolumes }}
+    - {{ . | quote }}
+    {{- end }}
+    {{- end }}
+  
+  # 主机网络设置
+  hostNetwork: {{ .Values.security.podSecurityPolicy.hostNetwork | default false }}
+  hostIPC: {{ .Values.security.podSecurityPolicy.hostIPC | default false }}
+  hostPID: {{ .Values.security.podSecurityPolicy.hostPID | default false }}
+  
+  # 端口范围
+  {{- if .Values.security.podSecurityPolicy.hostPorts }}
+  hostPorts:
+    {{- range .Values.security.podSecurityPolicy.hostPorts }}
+    - min: {{ .min }}
+      max: {{ .max }}
+    {{- end }}
+  {{- end }}
+  
+  # 运行用户设置
+  runAsUser:
+    rule: {{ .Values.security.podSecurityPolicy.runAsUser.rule | default "MustRunAsNonRoot" }}
+    {{- if .Values.security.podSecurityPolicy.runAsUser.ranges }}
+    ranges:
+      {{- range .Values.security.podSecurityPolicy.runAsUser.ranges }}
+      - min: {{ .min }}
+        max: {{ .max }}
+      {{- end }}
+    {{- end }}
+  
+  # 运行组设置
+  runAsGroup:
+    rule: {{ .Values.security.podSecurityPolicy.runAsGroup.rule | default "MustRunAs" }}
+    {{- if .Values.security.podSecurityPolicy.runAsGroup.ranges }}
+    ranges:
+      {{- range .Values.security.podSecurityPolicy.runAsGroup.ranges }}
+      - min: {{ .min }}
+        max: {{ .max }}
+      {{- end }}
+    {{- else }}
+    ranges:
+      - min: 1
+        max: 65535
+    {{- end }}
+  
+  # 补充组设置
+  supplementalGroups:
+    rule: {{ .Values.security.podSecurityPolicy.supplementalGroups.rule | default "MustRunAs" }}
+    {{- if .Values.security.podSecurityPolicy.supplementalGroups.ranges }}
+    ranges:
+      {{- range .Values.security.podSecurityPolicy.supplementalGroups.ranges }}
+      - min: {{ .min }}
+        max: {{ .max }}
+      {{- end }}
+    {{- else }}
+    ranges:
+      - min: 1
+        max: 65535
+    {{- end }}
+  
+  # 文件系统组设置
+  fsGroup:
+    rule: {{ .Values.security.podSecurityPolicy.fsGroup.rule | default "MustRunAs" }}
+    {{- if .Values.security.podSecurityPolicy.fsGroup.ranges }}
+    ranges:
+      {{- range .Values.security.podSecurityPolicy.fsGroup.ranges }}
+      - min: {{ .min }}
+        max: {{ .max }}
+      {{- end }}
+    {{- else }}
+    ranges:
+      - min: 1
+        max: 65535
+    {{- end }}
+  
+  # SELinux 设置
+  seLinux:
+    rule: {{ .Values.security.podSecurityPolicy.seLinux.rule | default "RunAsAny" }}
+    {{- if .Values.security.podSecurityPolicy.seLinux.seLinuxOptions }}
+    seLinuxOptions:
+      {{- toYaml .Values.security.podSecurityPolicy.seLinux.seLinuxOptions | nindent 6 }}
+    {{- end }}
+  
+  # 只读根文件系统
+  readOnlyRootFilesystem: {{ .Values.security.podSecurityPolicy.readOnlyRootFilesystem | default true }}
+{{- end }}
+
+---
+{{/*
+ClusterRole for PodSecurityPolicy
+*/}}
+{{- if .Values.security.podSecurityPolicy.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-psp
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: psp
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  verbs: ['use']
+  resourceNames: [{{ include "nova-proxy.fullname" . }}]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-psp
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: psp
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "nova-proxy.fullname" . }}-psp
+subjects:
+- kind: ServiceAccount
+  name: {{ include "nova-proxy.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+{{- end }}

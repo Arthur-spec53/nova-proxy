@@ -1,0 +1,124 @@
+{{/*
+Nova Proxy Helm Chart 安装说明
+*/}}
+🚀 Nova Proxy 已成功部署！
+
+📋 部署信息:
+  - Chart 版本: {{ .Chart.Version }}
+  - 应用版本: {{ .Chart.AppVersion }}
+  - 发布名称: {{ .Release.Name }}
+  - 命名空间: {{ .Release.Namespace }}
+  - 副本数: {{ .Values.replicaCount }}
+
+🌐 访问信息:
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+  * https://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  * 获取 NodePort:
+    export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "nova-proxy.fullname" . }})
+    export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+    echo https://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  * 获取 LoadBalancer IP:
+    export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "nova-proxy.fullname" . }} --template "{{ "{{" }} range (index .status.loadBalancer.ingress 0) {{ "}}" }}{{ "{{" }}.{{ "}}" }}{{ "{{" }} end {{ "}}" }}")
+    echo https://$SERVICE_IP:{{ .Values.service.ports.https }}
+    
+    注意: LoadBalancer 可能需要几分钟时间来分配外部 IP
+{{- else if contains "ClusterIP" .Values.service.type }}
+  * 端口转发访问:
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "nova-proxy.fullname" . }} {{ .Values.service.ports.https }}:{{ .Values.service.ports.https }}
+    然后访问: https://127.0.0.1:{{ .Values.service.ports.https }}
+{{- end }}
+
+🔍 监控和调试:
+{{- if .Values.monitoring.enabled }}
+  * Prometheus 指标:
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "nova-proxy.fullname" . }} {{ .Values.container.ports.metrics }}:{{ .Values.container.ports.metrics }}
+    访问: http://127.0.0.1:{{ .Values.container.ports.metrics }}/metrics
+{{- end }}
+
+  * 健康检查:
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "nova-proxy.fullname" . }} {{ .Values.container.ports.health }}:{{ .Values.container.ports.health }}
+    访问: http://127.0.0.1:{{ .Values.container.ports.health }}/health
+
+{{- if .Values.debugging.pprof.enabled }}
+  * pprof 调试:
+    kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "nova-proxy.fullname" . }} {{ .Values.container.ports.pprof }}:{{ .Values.container.ports.pprof }}
+    访问: http://127.0.0.1:{{ .Values.container.ports.pprof }}/debug/pprof/
+{{- end }}
+
+📊 状态检查:
+  * 查看 Pod 状态:
+    kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nova-proxy.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+  * 查看服务状态:
+    kubectl get svc --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nova-proxy.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+  * 查看日志:
+    kubectl logs --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nova-proxy.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -f
+
+{{- if .Values.autoscaling.enabled }}
+  * 查看 HPA 状态:
+    kubectl get hpa --namespace {{ .Release.Namespace }} {{ include "nova-proxy.fullname" . }}
+{{- end }}
+
+{{- if .Values.persistence.enabled }}
+  * 查看 PVC 状态:
+    kubectl get pvc --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nova-proxy.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+{{- end }}
+
+🔧 配置管理:
+  * 查看 ConfigMap:
+    kubectl get configmap --namespace {{ .Release.Namespace }} {{ include "nova-proxy.configMapName" . }} -o yaml
+
+  * 查看 Secret:
+    kubectl get secret --namespace {{ .Release.Namespace }} {{ include "nova-proxy.secretName" . }}
+
+  * 更新配置后重启:
+    kubectl rollout restart deployment/{{ include "nova-proxy.fullname" . }} --namespace {{ .Release.Namespace }}
+
+🚨 故障排除:
+  * 如果 Pod 无法启动，检查:
+    kubectl describe pod --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "nova-proxy.name" . }}"
+
+  * 如果服务无法访问，检查:
+    kubectl describe svc --namespace {{ .Release.Namespace }} {{ include "nova-proxy.fullname" . }}
+
+{{- if .Values.ingress.enabled }}
+  * 如果 Ingress 无法访问，检查:
+    kubectl describe ingress --namespace {{ .Release.Namespace }} {{ include "nova-proxy.fullname" . }}
+{{- end }}
+
+  * 查看事件:
+    kubectl get events --namespace {{ .Release.Namespace }} --sort-by='.lastTimestamp'
+
+📚 更多信息:
+  * 项目文档: https://github.com/your-org/nova-proxy
+  * Helm Chart 源码: https://github.com/your-org/nova-proxy/tree/main/helm/nova-proxy
+  * 问题反馈: https://github.com/your-org/nova-proxy/issues
+
+{{- if .Values.global.environment }}
+🏷️  环境: {{ .Values.global.environment }}
+{{- end }}
+
+{{- if .Values.security.networkPolicy.enabled }}
+🔒 网络策略已启用，请确保相关服务可以正常通信
+{{- end }}
+
+{{- if and .Values.tls.enabled (not .Values.tls.autoGenerate) }}
+🔐 请确保 TLS 证书已正确配置
+{{- end }}
+
+{{- if .Values.redis.enabled }}
+💾 Redis 缓存已启用
+{{- end }}
+
+{{- if .Values.database.enabled }}
+🗄️  数据库连接已配置
+{{- end }}
+
+感谢使用 Nova Proxy! 🎉

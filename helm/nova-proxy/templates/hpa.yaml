@@ -1,0 +1,287 @@
+{{/*
+Nova Proxy HorizontalPodAutoscaler 模板
+*/}}
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.autoscaling.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "nova-proxy.fullname" . }}
+  
+  minReplicas: {{ .Values.autoscaling.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas | default 10 }}
+  
+  # 扩缩容行为配置
+  {{- if .Values.autoscaling.behavior }}
+  behavior:
+    {{- with .Values.autoscaling.behavior.scaleDown }}
+    scaleDown:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.autoscaling.behavior.scaleUp }}
+    scaleUp:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+  {{- else }}
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationWindowSeconds | default 300 }}
+      policies:
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleDownPercent | default 50 }}
+        periodSeconds: {{ .Values.autoscaling.scaleDownPeriodSeconds | default 60 }}
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleDownPods | default 2 }}
+        periodSeconds: {{ .Values.autoscaling.scaleDownPeriodSeconds | default 60 }}
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationWindowSeconds | default 60 }}
+      policies:
+      - type: Percent
+        value: {{ .Values.autoscaling.scaleUpPercent | default 100 }}
+        periodSeconds: {{ .Values.autoscaling.scaleUpPeriodSeconds | default 60 }}
+      - type: Pods
+        value: {{ .Values.autoscaling.scaleUpPods | default 4 }}
+        periodSeconds: {{ .Values.autoscaling.scaleUpPeriodSeconds | default 60 }}
+      selectPolicy: Max
+  {{- end }}
+  
+  # 指标配置
+  metrics:
+  {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  {{- end }}
+  
+  {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
+  {{- end }}
+  
+  {{- if .Values.autoscaling.targetEphemeralStorageUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: ephemeral-storage
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.autoscaling.targetEphemeralStorageUtilizationPercentage }}
+  {{- end }}
+  
+  # 自定义指标
+  {{- range .Values.autoscaling.customMetrics }}
+  - type: {{ .type }}
+    {{- if eq .type "Pods" }}
+    pods:
+      metric:
+        name: {{ .name }}
+        {{- with .selector }}
+        selector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      target:
+        type: {{ .target.type }}
+        {{- if .target.averageValue }}
+        averageValue: {{ .target.averageValue }}
+        {{- end }}
+        {{- if .target.value }}
+        value: {{ .target.value }}
+        {{- end }}
+    {{- else if eq .type "Object" }}
+    object:
+      metric:
+        name: {{ .name }}
+        {{- with .selector }}
+        selector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      describedObject:
+        apiVersion: {{ .describedObject.apiVersion }}
+        kind: {{ .describedObject.kind }}
+        name: {{ .describedObject.name }}
+      target:
+        type: {{ .target.type }}
+        {{- if .target.averageValue }}
+        averageValue: {{ .target.averageValue }}
+        {{- end }}
+        {{- if .target.value }}
+        value: {{ .target.value }}
+        {{- end }}
+    {{- else if eq .type "External" }}
+    external:
+      metric:
+        name: {{ .name }}
+        {{- with .selector }}
+        selector:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+      target:
+        type: {{ .target.type }}
+        {{- if .target.averageValue }}
+        averageValue: {{ .target.averageValue }}
+        {{- end }}
+        {{- if .target.value }}
+        value: {{ .target.value }}
+        {{- end }}
+    {{- end }}
+  {{- end }}
+  
+  # 基于请求数的扩缩容
+  {{- if .Values.autoscaling.targetRequestsPerSecond }}
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_requests_per_second
+        selector:
+          matchLabels:
+            {{- include "nova-proxy.selectorLabels" . | nindent 12 }}
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetRequestsPerSecond | quote }}
+  {{- end }}
+  
+  # 基于连接数的扩缩容
+  {{- if .Values.autoscaling.targetActiveConnections }}
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_active_connections
+        selector:
+          matchLabels:
+            {{- include "nova-proxy.selectorLabels" . | nindent 12 }}
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetActiveConnections | quote }}
+  {{- end }}
+  
+  # 基于响应时间的扩缩容
+  {{- if .Values.autoscaling.targetResponseTime }}
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_response_time_p95
+        selector:
+          matchLabels:
+            {{- include "nova-proxy.selectorLabels" . | nindent 12 }}
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetResponseTime | quote }}
+  {{- end }}
+  
+  # 基于错误率的扩缩容
+  {{- if .Values.autoscaling.targetErrorRate }}
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_error_rate
+        selector:
+          matchLabels:
+            {{- include "nova-proxy.selectorLabels" . | nindent 12 }}
+      target:
+        type: AverageValue
+        averageValue: {{ .Values.autoscaling.targetErrorRate | quote }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy VerticalPodAutoscaler 模板
+*/}}
+{{- if .Values.verticalAutoscaling.enabled }}
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-vpa
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: vpa
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.verticalAutoscaling.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "nova-proxy.fullname" . }}
+  
+  updatePolicy:
+    updateMode: {{ .Values.verticalAutoscaling.updateMode | default "Auto" }}
+    {{- if .Values.verticalAutoscaling.minAllowed }}
+    minAllowed:
+      {{- toYaml .Values.verticalAutoscaling.minAllowed | nindent 6 }}
+    {{- end }}
+    {{- if .Values.verticalAutoscaling.maxAllowed }}
+    maxAllowed:
+      {{- toYaml .Values.verticalAutoscaling.maxAllowed | nindent 6 }}
+    {{- end }}
+  
+  resourcePolicy:
+    containerPolicies:
+    - containerName: {{ .Chart.Name }}
+      {{- if .Values.verticalAutoscaling.controlledResources }}
+      controlledResources:
+      {{- range .Values.verticalAutoscaling.controlledResources }}
+      - {{ . }}
+      {{- end }}
+      {{- else }}
+      controlledResources:
+      - cpu
+      - memory
+      {{- end }}
+      
+      {{- if .Values.verticalAutoscaling.controlledValues }}
+      controlledValues: {{ .Values.verticalAutoscaling.controlledValues }}
+      {{- else }}
+      controlledValues: RequestsAndLimits
+      {{- end }}
+      
+      {{- if .Values.verticalAutoscaling.minAllowed }}
+      minAllowed:
+        {{- toYaml .Values.verticalAutoscaling.minAllowed | nindent 8 }}
+      {{- else }}
+      minAllowed:
+        cpu: 100m
+        memory: 128Mi
+      {{- end }}
+      
+      {{- if .Values.verticalAutoscaling.maxAllowed }}
+      maxAllowed:
+        {{- toYaml .Values.verticalAutoscaling.maxAllowed | nindent 8 }}
+      {{- else }}
+      maxAllowed:
+        cpu: 2
+        memory: 4Gi
+      {{- end }}
+{{- end }}

@@ -1,0 +1,393 @@
+{{/*
+Nova Proxy NetworkPolicy 模板
+*/}}
+{{- if and .Values.global.networkPolicy.enabled .Values.security.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.security.networkPolicy.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  # 入站规则
+  ingress:
+  # 允许来自 Ingress Controller 的流量
+  {{- if .Values.security.networkPolicy.ingress.allowFromIngressController }}
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Values.security.networkPolicy.ingress.ingressControllerNamespace | default "ingress-nginx" }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.https | default 8080 }}
+    - protocol: UDP
+      port: {{ .Values.container.ports.quic | default 8443 }}
+  {{- end }}
+  
+  # 允许来自同一命名空间的流量
+  {{- if .Values.security.networkPolicy.ingress.allowFromSameNamespace }}
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Release.Namespace }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.https | default 8080 }}
+    - protocol: TCP
+      port: {{ .Values.container.ports.health | default 8081 }}
+    - protocol: UDP
+      port: {{ .Values.container.ports.quic | default 8443 }}
+  {{- end }}
+  
+  # 允许来自监控系统的流量
+  {{- if and .Values.monitoring.enabled .Values.security.networkPolicy.ingress.allowFromMonitoring }}
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Values.security.networkPolicy.ingress.monitoringNamespace | default "monitoring" }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.metrics | default 9090 }}
+    - protocol: TCP
+      port: {{ .Values.container.ports.health | default 8081 }}
+  {{- end }}
+  
+  # 允许来自负载均衡器的流量
+  {{- if .Values.security.networkPolicy.ingress.allowFromLoadBalancer }}
+  - from:
+    {{- range .Values.security.networkPolicy.ingress.loadBalancerCIDRs }}
+    - ipBlock:
+        cidr: {{ . }}
+    {{- end }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.https | default 8080 }}
+    - protocol: UDP
+      port: {{ .Values.container.ports.quic | default 8443 }}
+  {{- end }}
+  
+  # 允许健康检查流量
+  {{- if .Values.security.networkPolicy.ingress.allowHealthCheck }}
+  - from: []
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.health | default 8081 }}
+  {{- end }}
+  
+  # 自定义入站规则
+  {{- with .Values.security.networkPolicy.ingress.customRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+  
+  # 出站规则
+  egress:
+  # 允许 DNS 查询
+  {{- if .Values.security.networkPolicy.egress.allowDNS }}
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  {{- end }}
+  
+  # 允许访问上游服务
+  {{- if .Values.security.networkPolicy.egress.allowUpstreams }}
+  {{- range .Values.proxy.upstreams }}
+  {{- if .addresses }}
+  - to:
+    {{- range .addresses }}
+    - ipBlock:
+        cidr: {{ . }}/32
+    {{- end }}
+    ports:
+    - protocol: TCP
+      port: {{ .port | default 80 }}
+    {{- if .tlsPort }}
+    - protocol: TCP
+      port: {{ .tlsPort }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  
+  # 允许访问数据库
+  {{- if and .Values.database.enabled .Values.security.networkPolicy.egress.allowDatabase }}
+  - to:
+    {{- if .Values.database.networkPolicy.podSelector }}
+    - podSelector:
+        {{- toYaml .Values.database.networkPolicy.podSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.database.networkPolicy.namespaceSelector }}
+    - namespaceSelector:
+        {{- toYaml .Values.database.networkPolicy.namespaceSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.database.networkPolicy.ipBlock }}
+    - ipBlock:
+        cidr: {{ .Values.database.networkPolicy.ipBlock }}
+    {{- end }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.database.port | default 5432 }}
+  {{- end }}
+  
+  # 允许访问 Redis
+  {{- if and .Values.redis.enabled .Values.security.networkPolicy.egress.allowRedis }}
+  - to:
+    {{- if .Values.redis.networkPolicy.podSelector }}
+    - podSelector:
+        {{- toYaml .Values.redis.networkPolicy.podSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.redis.networkPolicy.namespaceSelector }}
+    - namespaceSelector:
+        {{- toYaml .Values.redis.networkPolicy.namespaceSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.redis.networkPolicy.ipBlock }}
+    - ipBlock:
+        cidr: {{ .Values.redis.networkPolicy.ipBlock }}
+    {{- end }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.redis.port | default 6379 }}
+  {{- end }}
+  
+  # 允许访问外部 HTTPS 服务
+  {{- if .Values.security.networkPolicy.egress.allowHTTPS }}
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  {{- end }}
+  
+  # 允许访问外部 HTTP 服务
+  {{- if .Values.security.networkPolicy.egress.allowHTTP }}
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  {{- end }}
+  
+  # 允许访问 SMTP 服务
+  {{- if .Values.security.networkPolicy.egress.allowSMTP }}
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 587
+    - protocol: TCP
+      port: 465
+    - protocol: TCP
+      port: 25
+  {{- end }}
+  
+  # 允许时间同步
+  {{- if .Values.security.networkPolicy.egress.allowNTP }}
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 123
+  {{- end }}
+  
+  # 允许访问 Kubernetes API
+  {{- if .Values.security.networkPolicy.egress.allowKubernetesAPI }}
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: default
+    ports:
+    - protocol: TCP
+      port: 443
+  {{- end }}
+  
+  # 自定义出站规则
+  {{- with .Values.security.networkPolicy.egress.customRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 默认拒绝所有流量的 NetworkPolicy
+*/}}
+{{- if and .Values.global.networkPolicy.enabled .Values.security.networkPolicy.denyAll.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-deny-all
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: deny-all
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.security.networkPolicy.denyAll.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+{{- end }}
+
+---
+{{/*
+Nova Proxy 监控 NetworkPolicy
+*/}}
+{{- if and .Values.global.networkPolicy.enabled .Values.monitoring.enabled .Values.security.networkPolicy.monitoring.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-monitoring
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: monitoring
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.security.networkPolicy.monitoring.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # 允许 Prometheus 抓取指标
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Values.security.networkPolicy.monitoring.prometheusNamespace | default "monitoring" }}
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.metrics | default 9090 }}
+  
+  # 允许 Grafana 访问
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Values.security.networkPolicy.monitoring.grafanaNamespace | default "monitoring" }}
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: grafana
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.metrics | default 9090 }}
+  
+  egress:
+  # 允许向追踪系统发送数据
+  {{- if .Values.tracing.enabled }}
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Values.security.networkPolicy.monitoring.tracingNamespace | default "tracing" }}
+    ports:
+    - protocol: TCP
+      port: 14268
+    - protocol: UDP
+      port: 6831
+    - protocol: UDP
+      port: 6832
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 开发环境 NetworkPolicy
+*/}}
+{{- if and .Values.global.networkPolicy.enabled .Values.security.networkPolicy.development.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-development
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: development
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.security.networkPolicy.development.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+      environment: development
+  
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # 允许来自开发者的流量
+  - from:
+    {{- range .Values.security.networkPolicy.development.developerCIDRs }}
+    - ipBlock:
+        cidr: {{ . }}
+    {{- end }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.container.ports.https | default 8080 }}
+    - protocol: TCP
+      port: {{ .Values.container.ports.health | default 8081 }}
+    - protocol: TCP
+      port: {{ .Values.container.ports.metrics | default 9090 }}
+    {{- if .Values.debugging.pprof.enabled }}
+    - protocol: TCP
+      port: {{ .Values.container.ports.pprof | default 6060 }}
+    {{- end }}
+    - protocol: UDP
+      port: {{ .Values.container.ports.quic | default 8443 }}
+  
+  # 允许来自同一命名空间的所有流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: {{ .Release.Namespace }}
+  
+  egress:
+  # 允许所有出站流量（开发环境）
+  - to: []
+{{- end }}

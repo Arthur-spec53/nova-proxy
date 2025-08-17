@@ -1,0 +1,264 @@
+{{/*
+Nova Proxy PersistentVolumeClaim 模板
+*/}}
+{{- if .Values.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nova-proxy.pvcName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.persistence.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+  {{- range .Values.persistence.accessModes }}
+  - {{ . }}
+  {{- end }}
+  
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size | quote }}
+  
+  {{- if .Values.persistence.storageClass }}
+  {{- if (eq "-" .Values.persistence.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  {{- else if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  
+  {{- with .Values.persistence.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  
+  {{- with .Values.persistence.dataSource }}
+  dataSource:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  
+  {{- with .Values.persistence.dataSourceRef }}
+  dataSourceRef:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  
+  {{- if .Values.persistence.volumeMode }}
+  volumeMode: {{ .Values.persistence.volumeMode }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 日志 PersistentVolumeClaim
+*/}}
+{{- if and .Values.persistence.enabled .Values.persistence.logs.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-logs
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: logs
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.persistence.logs.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+  {{- range .Values.persistence.logs.accessModes | default .Values.persistence.accessModes }}
+  - {{ . }}
+  {{- end }}
+  
+  resources:
+    requests:
+      storage: {{ .Values.persistence.logs.size | default "10Gi" | quote }}
+  
+  {{- if .Values.persistence.logs.storageClass }}
+  {{- if (eq "-" .Values.persistence.logs.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.logs.storageClass | quote }}
+  {{- end }}
+  {{- else if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- else if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  
+  {{- with .Values.persistence.logs.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 缓存 PersistentVolumeClaim
+*/}}
+{{- if and .Values.persistence.enabled .Values.persistence.cache.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-cache
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: cache
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.persistence.cache.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+  {{- range .Values.persistence.cache.accessModes | default .Values.persistence.accessModes }}
+  - {{ . }}
+  {{- end }}
+  
+  resources:
+    requests:
+      storage: {{ .Values.persistence.cache.size | default "5Gi" | quote }}
+  
+  {{- if .Values.persistence.cache.storageClass }}
+  {{- if (eq "-" .Values.persistence.cache.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.cache.storageClass | quote }}
+  {{- end }}
+  {{- else if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- else if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  
+  {{- with .Values.persistence.cache.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 临时数据 PersistentVolumeClaim
+*/}}
+{{- if and .Values.persistence.enabled .Values.persistence.temp.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-temp
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: temp
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.persistence.temp.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+  {{- range .Values.persistence.temp.accessModes | default .Values.persistence.accessModes }}
+  - {{ . }}
+  {{- end }}
+  
+  resources:
+    requests:
+      storage: {{ .Values.persistence.temp.size | default "2Gi" | quote }}
+  
+  {{- if .Values.persistence.temp.storageClass }}
+  {{- if (eq "-" .Values.persistence.temp.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.temp.storageClass | quote }}
+  {{- end }}
+  {{- else if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- else if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  
+  {{- with .Values.persistence.temp.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy 备份 PersistentVolumeClaim
+*/}}
+{{- if and .Values.persistence.enabled .Values.persistence.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-backup
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: backup
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.persistence.backup.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  accessModes:
+  {{- range .Values.persistence.backup.accessModes | default .Values.persistence.accessModes }}
+  - {{ . }}
+  {{- end }}
+  
+  resources:
+    requests:
+      storage: {{ .Values.persistence.backup.size | default "20Gi" | quote }}
+  
+  {{- if .Values.persistence.backup.storageClass }}
+  {{- if (eq "-" .Values.persistence.backup.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.backup.storageClass | quote }}
+  {{- end }}
+  {{- else if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- else if .Values.global.storageClass }}
+  storageClassName: {{ .Values.global.storageClass | quote }}
+  {{- end }}
+  
+  {{- with .Values.persistence.backup.selector }}
+  selector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

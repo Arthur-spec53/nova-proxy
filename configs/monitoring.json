@@ -1,0 +1,217 @@
+{
+  "monitoring": {
+    "enabled": true,
+    "server": {
+      "address": ":9090",
+      "read_timeout": "30s",
+      "write_timeout": "30s",
+      "idle_timeout": "120s"
+    },
+    "metrics": {
+      "collection_interval": "15s",
+      "retention_period": "7d",
+      "enable_runtime_metrics": true,
+      "enable_custom_metrics": true,
+      "prometheus": {
+        "enabled": true,
+        "path": "/metrics",
+        "namespace": "nova",
+        "subsystem": "proxy"
+      }
+    },
+    "health_checks": {
+      "enabled": true,
+      "endpoints": {
+        "health": "/health",
+        "ready": "/health/ready",
+        "live": "/health/live"
+      },
+      "checks": {
+        "database": {
+          "enabled": true,
+          "timeout": "5s",
+          "interval": "30s"
+        },
+        "redis": {
+          "enabled": false,
+          "timeout": "3s",
+          "interval": "30s"
+        },
+        "external_api": {
+          "enabled": false,
+          "timeout": "10s",
+          "interval": "60s",
+          "url": "https://api.example.com/health"
+        },
+        "disk_space": {
+          "enabled": true,
+          "timeout": "5s",
+          "interval": "60s",
+          "threshold": 0.9
+        },
+        "memory": {
+          "enabled": true,
+          "timeout": "5s",
+          "interval": "30s",
+          "threshold": 0.8
+        }
+      }
+    },
+    "alerting": {
+      "enabled": true,
+      "evaluation_interval": "30s",
+      "notification_timeout": "30s",
+      "rules": {
+        "high_error_rate": {
+          "enabled": true,
+          "query": "rate(nova_errors_total[5m]) > 0.1",
+          "threshold": 0.1,
+          "duration": "5m",
+          "severity": "warning",
+          "labels": {
+            "component": "proxy",
+            "team": "infrastructure"
+          },
+          "annotations": {
+            "summary": "High error rate detected",
+            "description": "Error rate is above 10% for more than 5 minutes",
+            "runbook": "https://wiki.company.com/runbooks/high-error-rate"
+          }
+        },
+        "high_memory_usage": {
+          "enabled": true,
+          "query": "nova_memory_usage_bytes{type=\"heap_alloc\"} / 1024 / 1024 / 1024 > 2",
+          "threshold": 2.0,
+          "duration": "10m",
+          "severity": "warning",
+          "labels": {
+            "component": "proxy",
+            "resource": "memory"
+          },
+          "annotations": {
+            "summary": "High memory usage detected",
+            "description": "Memory usage is above 2GB for more than 10 minutes"
+          }
+        },
+        "service_down": {
+          "enabled": true,
+          "query": "up{job=\"nova-proxy\"} == 0",
+          "threshold": 0,
+          "duration": "1m",
+          "severity": "critical",
+          "labels": {
+            "component": "proxy",
+            "severity": "critical"
+          },
+          "annotations": {
+            "summary": "Nova Proxy service is down",
+            "description": "Nova Proxy service has been down for more than 1 minute",
+            "action": "Immediate investigation required"
+          }
+        },
+        "high_connection_count": {
+          "enabled": true,
+          "query": "nova_active_connections > 1000",
+          "threshold": 1000,
+          "duration": "5m",
+          "severity": "warning",
+          "labels": {
+            "component": "proxy",
+            "resource": "connections"
+          },
+          "annotations": {
+            "summary": "High connection count detected",
+            "description": "Active connections exceed 1000 for more than 5 minutes"
+          }
+        },
+        "certificate_expiry": {
+          "enabled": true,
+          "query": "(nova_certificate_expiry_seconds - time()) / 86400 < 30",
+          "threshold": 30,
+          "duration": "1h",
+          "severity": "warning",
+          "labels": {
+            "component": "security",
+            "resource": "certificate"
+          },
+          "annotations": {
+            "summary": "Certificate expiring soon",
+            "description": "Certificate will expire in less than 30 days"
+          }
+        }
+      },
+      "notification_channels": {
+        "webhook": {
+          "enabled": false,
+          "url": "https://hooks.example.com/webhook",
+          "timeout": "10s",
+          "retry_count": 3
+        },
+        "slack": {
+          "enabled": false,
+          "webhook_url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+          "channel": "#alerts",
+          "username": "Nova Proxy Alert",
+          "timeout": "10s"
+        },
+        "email": {
+          "enabled": false,
+          "smtp_host": "smtp.example.com",
+          "smtp_port": 587,
+          "username": "alerts@example.com",
+          "password": "your-password",
+          "from": "alerts@example.com",
+          "to": ["admin@example.com", "ops@example.com"],
+          "subject_template": "[Nova Proxy] {{ .Severity | upper }}: {{ .Name }}",
+          "body_template": "Alert: {{ .Name }}\nSeverity: {{ .Severity }}\nMessage: {{ .Message }}\nTime: {{ .Timestamp }}"
+        },
+        "pagerduty": {
+          "enabled": false,
+          "integration_key": "your-pagerduty-integration-key",
+          "severity_mapping": {
+            "info": "info",
+            "warning": "warning",
+            "critical": "error",
+            "emergency": "critical"
+          }
+        }
+      }
+    },
+    "logging": {
+      "level": "info",
+      "format": "json",
+      "output": "stdout",
+      "enable_caller": true,
+      "enable_stacktrace": false
+    },
+    "profiling": {
+      "enabled": false,
+      "address": ":6060",
+      "endpoints": {
+        "pprof": "/debug/pprof/",
+        "vars": "/debug/vars",
+        "trace": "/debug/trace"
+      }
+    },
+    "tracing": {
+      "enabled": false,
+      "jaeger": {
+        "endpoint": "http://localhost:14268/api/traces",
+        "service_name": "nova-proxy",
+        "sample_rate": 0.1
+      },
+      "zipkin": {
+        "endpoint": "http://localhost:9411/api/v2/spans",
+        "service_name": "nova-proxy"
+      }
+    },
+    "dashboard": {
+      "enabled": false,
+      "grafana": {
+        "url": "http://localhost:3000",
+        "dashboard_id": "nova-proxy-dashboard",
+        "api_key": "your-grafana-api-key"
+      }
+    }
+  }
+}

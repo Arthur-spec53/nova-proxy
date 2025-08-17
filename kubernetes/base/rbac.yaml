@@ -1,0 +1,206 @@
+# Nova Proxy Kubernetes RBAC 配置
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: serviceaccount
+automountServiceAccountToken: true
+imagePullSecrets:
+- name: nova-proxy-registry
+
+---
+# ClusterRole - 定义权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: rbac
+rules:
+# 读取节点信息（用于网络拓扑感知）
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list", "watch"]
+
+# 读取服务和端点信息（用于服务发现）
+- apiGroups: [""]
+  resources: ["services", "endpoints"]
+  verbs: ["get", "list", "watch"]
+
+# 读取 Pod 信息（用于负载均衡和健康检查）
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+
+# 读取 ConfigMap 和 Secret（用于配置热重载）
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list", "watch"]
+
+# 创建事件（用于审计和监控）
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+
+# 读取网络策略（用于安全策略）
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["get", "list", "watch"]
+
+# 读取 Ingress 信息（用于路由配置）
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding - 绑定权限到 ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nova-proxy
+subjects:
+- kind: ServiceAccount
+  name: nova-proxy
+  namespace: default  # 根据实际部署命名空间调整
+
+---
+# Role - 命名空间级别权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: rbac
+rules:
+# 管理自己的 ConfigMap 和 Secret
+- apiGroups: [""]
+  resources: ["configmaps"]
+  resourceNames: ["nova-proxy-config", "nova-proxy-profiles"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["nova-proxy-certs", "nova-proxy-secrets"]
+  verbs: ["get", "list", "watch"]
+
+# 更新自己的状态
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  resourceNames: ["nova-proxy"]
+  verbs: ["get", "list", "watch", "update", "patch"]
+
+# 管理自己的 Pod
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "delete"]
+
+# 创建和管理租约（用于领导选举）
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+---
+# RoleBinding - 绑定命名空间权限
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: nova-proxy
+subjects:
+- kind: ServiceAccount
+  name: nova-proxy
+  namespace: default  # 根据实际部署命名空间调整
+
+---
+# PodSecurityPolicy（如果集群启用了 PSP）
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: nova-proxy
+  labels:
+    app: nova-proxy
+    component: security
+spec:
+  privileged: false
+  allowPrivilegeEscalation: false
+  requiredDropCapabilities:
+    - ALL
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  runAsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1001
+        max: 1001
+  seLinux:
+    rule: 'RunAsAny'
+  fsGroup:
+    rule: 'MustRunAs'
+    ranges:
+      - min: 1001
+        max: 1001
+  readOnlyRootFilesystem: true
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  hostPorts:
+    - min: 0
+      max: 0
+
+---
+# ClusterRole for PSP
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nova-proxy-psp
+  labels:
+    app: nova-proxy
+    component: security
+rules:
+- apiGroups: ['policy']
+  resources: ['podsecuritypolicies']
+  resourceNames: ['nova-proxy']
+  verbs: ['use']
+
+---
+# ClusterRoleBinding for PSP
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nova-proxy-psp
+  labels:
+    app: nova-proxy
+    component: security
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nova-proxy-psp
+subjects:
+- kind: ServiceAccount
+  name: nova-proxy
+  namespace: default  # 根据实际部署命名空间调整

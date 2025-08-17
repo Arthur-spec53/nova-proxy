@@ -1,0 +1,259 @@
+# 主服务 - 对外暴露 HTTP/HTTPS 流量
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: service
+    app.kubernetes.io/part-of: nova-proxy
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "tcp"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+    prometheus.io/scrape: "false"
+spec:
+  type: LoadBalancer
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800  # 3 hours
+  ports:
+    - name: http
+      port: 80
+      targetPort: nginx-http
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: nginx-https
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+  loadBalancerSourceRanges:
+    - 0.0.0.0/0  # 允许所有来源，生产环境应限制
+
+---
+# 内部服务 - 用于集群内部通信
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-internal
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: internal-service
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    prometheus.io/scrape: "false"
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# 监控服务 - 用于 Prometheus 指标收集
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-metrics
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    prometheus.io/scheme: "http"
+spec:
+  type: ClusterIP
+  ports:
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# 健康检查服务 - 用于健康检查和管理
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-health
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: health
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    prometheus.io/scrape: "false"
+spec:
+  type: ClusterIP
+  ports:
+    - name: health
+      port: 8081
+      targetPort: health
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# 管理服务 - 用于管理和调试
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-admin
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: admin
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    prometheus.io/scrape: "false"
+spec:
+  type: ClusterIP
+  ports:
+    - name: admin
+      port: 8082
+      targetPort: admin
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# Headless 服务 - 用于服务发现
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-headless
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: headless
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# NodePort 服务 - 用于开发和测试
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-nodeport
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: nodeport
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    prometheus.io/scrape: "false"
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 80
+      targetPort: nginx-http
+      nodePort: 30080
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: nginx-https
+      nodePort: 30443
+      protocol: TCP
+    - name: grpc
+      port: 9000
+      targetPort: grpc
+      nodePort: 30900
+      protocol: TCP
+    - name: metrics
+      port: 9090
+      targetPort: metrics
+      nodePort: 30909
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+
+---
+# ExternalName 服务 - 用于外部服务映射
+apiVersion: v1
+kind: Service
+metadata:
+  name: nova-proxy-external
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: external
+    app.kubernetes.io/part-of: nova-proxy
+spec:
+  type: ExternalName
+  externalName: nova-proxy.example.com
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+    - name: https
+      port: 443
+      protocol: TCP

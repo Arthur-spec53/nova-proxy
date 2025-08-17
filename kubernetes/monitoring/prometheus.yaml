@@ -1,0 +1,355 @@
+# Nova Proxy Prometheus 监控配置
+# Prometheus 部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.45.0
+        args:
+        - '--config.file=/etc/prometheus/prometheus.yml'
+        - '--storage.tsdb.path=/prometheus/'
+        - '--web.console.libraries=/etc/prometheus/console_libraries'
+        - '--web.console.templates=/etc/prometheus/consoles'
+        - '--storage.tsdb.retention.time=15d'
+        - '--web.enable-lifecycle'
+        - '--web.enable-admin-api'
+        ports:
+        - containerPort: 9090
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "200m"
+          limits:
+            memory: "2Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: prometheus-config
+          mountPath: /etc/prometheus/
+        - name: prometheus-storage
+          mountPath: /prometheus/
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          initialDelaySeconds: 30
+          timeoutSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+      volumes:
+      - name: prometheus-config
+        configMap:
+          name: prometheus-config
+      - name: prometheus-storage
+        emptyDir:
+          sizeLimit: 10Gi
+
+---
+# Prometheus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+spec:
+  ports:
+  - port: 9090
+    targetPort: 9090
+    name: web
+  selector:
+    app: prometheus
+
+---
+# Prometheus ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+
+---
+# Prometheus ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+rules:
+- apiGroups: [""]
+  resources:
+  - nodes
+  - nodes/proxy
+  - services
+  - endpoints
+  - pods
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - extensions
+  resources:
+  - ingresses
+  verbs: ["get", "list", "watch"]
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+
+---
+# Prometheus ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+  labels:
+    app: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: default
+
+---
+# Prometheus 配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    app: prometheus
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: 'nova-proxy-cluster'
+        replica: 'prometheus-1'
+    
+    rule_files:
+    - "/etc/prometheus/rules/*.yml"
+    
+    alerting:
+      alertmanagers:
+      - static_configs:
+        - targets:
+          - alertmanager:9093
+    
+    scrape_configs:
+    # Prometheus 自身监控
+    - job_name: 'prometheus'
+      static_configs:
+      - targets: ['localhost:9090']
+    
+    # Nova Proxy 应用监控
+    - job_name: 'nova-proxy'
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app]
+        action: keep
+        regex: nova-proxy
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+      scrape_interval: 30s
+      scrape_timeout: 10s
+    
+    # Kubernetes API Server 监控
+    - job_name: 'kubernetes-apiservers'
+      kubernetes_sd_configs:
+      - role: endpoints
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: default;kubernetes;https
+    
+    # Kubernetes 节点监控
+    - job_name: 'kubernetes-nodes'
+      kubernetes_sd_configs:
+      - role: node
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics
+    
+    # Kubernetes Pod 监控
+    - job_name: 'kubernetes-pods'
+      kubernetes_sd_configs:
+      - role: pod
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: kubernetes_namespace
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: kubernetes_pod_name
+    
+    # cAdvisor 监控（容器指标）
+    - job_name: 'kubernetes-cadvisor'
+      kubernetes_sd_configs:
+      - role: node
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+      - action: labelmap
+        regex: __meta_kubernetes_node_label_(.+)
+      - target_label: __address__
+        replacement: kubernetes.default.svc:443
+      - source_labels: [__meta_kubernetes_node_name]
+        regex: (.+)
+        target_label: __metrics_path__
+        replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+      metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'container_(cpu|memory|network|fs)_.*'
+        action: keep
+    
+    # Node Exporter 监控（如果部署了）
+    - job_name: 'node-exporter'
+      kubernetes_sd_configs:
+      - role: endpoints
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_endpoints_name]
+        action: keep
+        regex: node-exporter
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        action: keep
+        regex: metrics
+    
+    # Ingress Controller 监控
+    - job_name: 'ingress-nginx'
+      kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+          - ingress-nginx
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+        action: keep
+        regex: ingress-nginx
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        target_label: __address__
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+
+  # 告警规则
+  rules.yml: |
+    groups:
+    - name: nova-proxy.rules
+      rules:
+      # 记录规则：计算请求速率
+      - record: nova_proxy:request_rate_5m
+        expr: rate(nova_proxy_requests_total[5m])
+      
+      # 记录规则：计算错误率
+      - record: nova_proxy:error_rate_5m
+        expr: rate(nova_proxy_errors_total[5m]) / rate(nova_proxy_requests_total[5m])
+      
+      # 记录规则：计算平均响应时间
+      - record: nova_proxy:response_time_avg_5m
+        expr: rate(nova_proxy_request_duration_seconds_sum[5m]) / rate(nova_proxy_request_duration_seconds_count[5m])
+      
+      # 告警规则：高错误率
+      - alert: NovaProxyHighErrorRate
+        expr: nova_proxy:error_rate_5m > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy high error rate"
+          description: "Nova Proxy error rate is {{ $value | humanizePercentage }} for more than 5 minutes"
+      
+      # 告警规则：高延迟
+      - alert: NovaProxyHighLatency
+        expr: histogram_quantile(0.95, rate(nova_proxy_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy high latency"
+          description: "Nova Proxy 95th percentile latency is {{ $value }}s"
+      
+      # 告警规则：服务不可用
+      - alert: NovaProxyDown
+        expr: up{job="nova-proxy"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy is down"
+          description: "Nova Proxy instance {{ $labels.instance }} is down"

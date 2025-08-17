@@ -1,0 +1,374 @@
+{{/*
+Nova Proxy ServiceMonitor 模板
+用于 Prometheus 监控
+*/}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheus.enabled .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.monitoring.serviceMonitor.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  jobLabel: {{ .Values.monitoring.serviceMonitor.jobLabel | default "app.kubernetes.io/name" }}
+  
+  {{- if .Values.monitoring.serviceMonitor.targetLabels }}
+  targetLabels:
+    {{- range .Values.monitoring.serviceMonitor.targetLabels }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  
+  {{- if .Values.monitoring.serviceMonitor.podTargetLabels }}
+  podTargetLabels:
+    {{- range .Values.monitoring.serviceMonitor.podTargetLabels }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  
+  selector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+      {{- with .Values.monitoring.serviceMonitor.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  
+  {{- if .Values.monitoring.serviceMonitor.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml .Values.monitoring.serviceMonitor.namespaceSelector | nindent 4 }}
+  {{- end }}
+  
+  endpoints:
+  - port: {{ .Values.monitoring.serviceMonitor.port | default "metrics" }}
+    {{- if .Values.monitoring.serviceMonitor.path }}
+    path: {{ .Values.monitoring.serviceMonitor.path }}
+    {{- end }}
+    {{- if .Values.monitoring.serviceMonitor.interval }}
+    interval: {{ .Values.monitoring.serviceMonitor.interval }}
+    {{- end }}
+    {{- if .Values.monitoring.serviceMonitor.scrapeTimeout }}
+    scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+    {{- end }}
+    {{- if .Values.monitoring.serviceMonitor.scheme }}
+    scheme: {{ .Values.monitoring.serviceMonitor.scheme }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.tlsConfig }}
+    tlsConfig:
+      {{- toYaml .Values.monitoring.serviceMonitor.tlsConfig | nindent 6 }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.bearerTokenFile }}
+    bearerTokenFile: {{ .Values.monitoring.serviceMonitor.bearerTokenFile }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.bearerTokenSecret }}
+    bearerTokenSecret:
+      {{- toYaml .Values.monitoring.serviceMonitor.bearerTokenSecret | nindent 6 }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.basicAuth }}
+    basicAuth:
+      {{- toYaml .Values.monitoring.serviceMonitor.basicAuth | nindent 6 }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.monitoring.serviceMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.serviceMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.monitoring.serviceMonitor.relabelings | nindent 6 }}
+    {{- end }}
+    
+    # 默认的重标记规则
+    {{- if not .Values.monitoring.serviceMonitor.relabelings }}
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_pod_container_name]
+      targetLabel: container
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+    - sourceLabels: [__meta_kubernetes_service_name]
+      targetLabel: service
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    {{- end }}
+    
+    # 默认的指标重标记规则
+    {{- if not .Values.monitoring.serviceMonitor.metricRelabelings }}
+    metricRelabelings:
+    # 添加版本标签
+    - sourceLabels: [__name__]
+      targetLabel: version
+      replacement: {{ .Chart.AppVersion | quote }}
+    # 过滤掉不需要的指标
+    - sourceLabels: [__name__]
+      regex: 'go_gc_.*'
+      action: drop
+    - sourceLabels: [__name__]
+      regex: 'go_memstats_.*'
+      action: drop
+    {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy PrometheusRule 模板
+用于定义告警规则
+*/}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Values.monitoring.prometheusRule.namespace | default .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.monitoring.prometheusRule.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+  - name: nova-proxy.availability
+    interval: {{ .Values.monitoring.prometheusRule.interval | default "30s" }}
+    rules:
+    # 服务可用性告警
+    - alert: NovaProxyDown
+      expr: up{job="{{ include "nova-proxy.fullname" . }}"} == 0
+      for: {{ .Values.monitoring.prometheusRule.rules.serviceDown.for | default "1m" }}
+      labels:
+        severity: critical
+        service: nova-proxy
+        component: availability
+      annotations:
+        summary: "Nova Proxy instance is down"
+        description: "Nova Proxy instance {{ "{{" }} $labels.instance {{ "}}" }} has been down for more than 1 minute."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/service-down"
+    
+    # 高错误率告警
+    - alert: NovaProxyHighErrorRate
+      expr: |
+        (
+          rate(nova_proxy_requests_total{status=~"5.."}[5m]) /
+          rate(nova_proxy_requests_total[5m])
+        ) * 100 > {{ .Values.monitoring.prometheusRule.rules.highErrorRate.threshold | default 5 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.highErrorRate.for | default "5m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: errors
+      annotations:
+        summary: "Nova Proxy high error rate"
+        description: "Nova Proxy error rate is {{ "{{" }} $value {{ "}}" }}% for the last 5 minutes."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/high-error-rate"
+    
+    # 高延迟告警
+    - alert: NovaProxyHighLatency
+      expr: |
+        histogram_quantile(0.95,
+          rate(nova_proxy_request_duration_seconds_bucket[5m])
+        ) > {{ .Values.monitoring.prometheusRule.rules.highLatency.threshold | default 1 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.highLatency.for | default "5m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: performance
+      annotations:
+        summary: "Nova Proxy high latency"
+        description: "Nova Proxy 95th percentile latency is {{ "{{" }} $value {{ "}}" }}s for the last 5 minutes."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/high-latency"
+  
+  - name: nova-proxy.resources
+    interval: {{ .Values.monitoring.prometheusRule.interval | default "30s" }}
+    rules:
+    # 高 CPU 使用率告警
+    - alert: NovaProxyHighCPU
+      expr: |
+        rate(container_cpu_usage_seconds_total{pod=~"{{ include "nova-proxy.fullname" . }}-.*"}[5m]) * 100 > {{ .Values.monitoring.prometheusRule.rules.highCPU.threshold | default 80 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.highCPU.for | default "5m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: resources
+      annotations:
+        summary: "Nova Proxy high CPU usage"
+        description: "Nova Proxy CPU usage is {{ "{{" }} $value {{ "}}" }}% for the last 5 minutes."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/high-cpu"
+    
+    # 高内存使用率告警
+    - alert: NovaProxyHighMemory
+      expr: |
+        (container_memory_usage_bytes{pod=~"{{ include "nova-proxy.fullname" . }}-.*"} / container_spec_memory_limit_bytes{pod=~"{{ include "nova-proxy.fullname" . }}-.*"}) * 100 > {{ .Values.monitoring.prometheusRule.rules.highMemory.threshold | default 80 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.highMemory.for | default "5m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: resources
+      annotations:
+        summary: "Nova Proxy high memory usage"
+        description: "Nova Proxy memory usage is {{ "{{" }} $value {{ "}}" }}% for the last 5 minutes."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/high-memory"
+  
+  - name: nova-proxy.connections
+    interval: {{ .Values.monitoring.prometheusRule.interval | default "30s" }}
+    rules:
+    # 数据库连接问题告警
+    - alert: NovaProxyDatabaseConnectionFailed
+      expr: nova_proxy_database_connections_failed_total > 0
+      for: {{ .Values.monitoring.prometheusRule.rules.databaseConnection.for | default "1m" }}
+      labels:
+        severity: critical
+        service: nova-proxy
+        component: database
+      annotations:
+        summary: "Nova Proxy database connection failed"
+        description: "Nova Proxy failed to connect to database {{ "{{" }} $value {{ "}}" }} times."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/database-connection"
+    
+    # Redis 连接问题告警
+    - alert: NovaProxyRedisConnectionFailed
+      expr: nova_proxy_redis_connections_failed_total > 0
+      for: {{ .Values.monitoring.prometheusRule.rules.redisConnection.for | default "1m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: redis
+      annotations:
+        summary: "Nova Proxy Redis connection failed"
+        description: "Nova Proxy failed to connect to Redis {{ "{{" }} $value {{ "}}" }} times."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/redis-connection"
+  
+  - name: nova-proxy.quic
+    interval: {{ .Values.monitoring.prometheusRule.interval | default "30s" }}
+    rules:
+    # QUIC 连接失败告警
+    - alert: NovaProxyQUICConnectionFailed
+      expr: rate(nova_proxy_quic_connections_failed_total[5m]) > {{ .Values.monitoring.prometheusRule.rules.quicConnectionFailed.threshold | default 10 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.quicConnectionFailed.for | default "2m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: quic
+      annotations:
+        summary: "Nova Proxy QUIC connection failures"
+        description: "Nova Proxy QUIC connection failure rate is {{ "{{" }} $value {{ "}}" }} per second."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/quic-connection-failed"
+    
+    # QUIC 多路径性能告警
+    - alert: NovaProxyQUICMultipathDegraded
+      expr: nova_proxy_quic_multipath_active_paths < {{ .Values.monitoring.prometheusRule.rules.quicMultipathDegraded.threshold | default 2 }}
+      for: {{ .Values.monitoring.prometheusRule.rules.quicMultipathDegraded.for | default "5m" }}
+      labels:
+        severity: warning
+        service: nova-proxy
+        component: quic
+      annotations:
+        summary: "Nova Proxy QUIC multipath degraded"
+        description: "Nova Proxy QUIC multipath has only {{ "{{" }} $value {{ "}}" }} active paths."
+        runbook_url: "https://docs.nova-proxy.com/runbooks/quic-multipath-degraded"
+  
+  {{- if .Values.monitoring.prometheusRule.customRules }}
+  - name: nova-proxy.custom
+    interval: {{ .Values.monitoring.prometheusRule.interval | default "30s" }}
+    rules:
+    {{- toYaml .Values.monitoring.prometheusRule.customRules | nindent 4 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy PodMonitor 模板
+用于监控 Pod 级别的指标
+*/}}
+{{- if and .Values.monitoring.enabled .Values.monitoring.podMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Values.monitoring.podMonitor.namespace | default .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.monitoring.podMonitor.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  jobLabel: {{ .Values.monitoring.podMonitor.jobLabel | default "app.kubernetes.io/name" }}
+  
+  {{- if .Values.monitoring.podMonitor.podTargetLabels }}
+  podTargetLabels:
+    {{- range .Values.monitoring.podMonitor.podTargetLabels }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  
+  selector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+      {{- with .Values.monitoring.podMonitor.selector }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+  
+  {{- if .Values.monitoring.podMonitor.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml .Values.monitoring.podMonitor.namespaceSelector | nindent 4 }}
+  {{- end }}
+  
+  podMetricsEndpoints:
+  - port: {{ .Values.monitoring.podMonitor.port | default "metrics" }}
+    {{- if .Values.monitoring.podMonitor.path }}
+    path: {{ .Values.monitoring.podMonitor.path }}
+    {{- end }}
+    {{- if .Values.monitoring.podMonitor.interval }}
+    interval: {{ .Values.monitoring.podMonitor.interval }}
+    {{- end }}
+    {{- if .Values.monitoring.podMonitor.scrapeTimeout }}
+    scrapeTimeout: {{ .Values.monitoring.podMonitor.scrapeTimeout }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.podMonitor.relabelings }}
+    relabelings:
+      {{- toYaml .Values.monitoring.podMonitor.relabelings | nindent 6 }}
+    {{- end }}
+    
+    {{- if .Values.monitoring.podMonitor.metricRelabelings }}
+    metricRelabelings:
+      {{- toYaml .Values.monitoring.podMonitor.metricRelabelings | nindent 6 }}
+    {{- end }}
+{{- end }}

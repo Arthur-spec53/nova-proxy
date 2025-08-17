@@ -1,0 +1,245 @@
+{{/*
+Nova Proxy Ingress 模板
+*/}}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Ingress 类
+    {{- if .Values.ingress.className }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- end }}
+    
+    # Nginx Ingress 注解
+    {{- if eq (.Values.ingress.className | default "nginx") "nginx" }}
+    nginx.ingress.kubernetes.io/ssl-redirect: {{ .Values.ingress.sslRedirect | default "true" | quote }}
+    nginx.ingress.kubernetes.io/force-ssl-redirect: {{ .Values.ingress.forceSslRedirect | default "true" | quote }}
+    nginx.ingress.kubernetes.io/backend-protocol: {{ .Values.ingress.backendProtocol | default "HTTP" | quote }}
+    nginx.ingress.kubernetes.io/proxy-body-size: {{ .Values.ingress.proxyBodySize | default "1m" | quote }}
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: {{ .Values.ingress.proxyConnectTimeout | default "5" | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.proxySendTimeout | default "60" | quote }}
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.proxyReadTimeout | default "60" | quote }}
+    nginx.ingress.kubernetes.io/proxy-buffer-size: {{ .Values.ingress.proxyBufferSize | default "4k" | quote }}
+    nginx.ingress.kubernetes.io/proxy-buffering: {{ .Values.ingress.proxyBuffering | default "on" | quote }}
+    
+    # 速率限制
+    {{- if .Values.ingress.rateLimit.enabled }}
+    nginx.ingress.kubernetes.io/rate-limit-rps: {{ .Values.ingress.rateLimit.rps | default "10" | quote }}
+    nginx.ingress.kubernetes.io/rate-limit-connections: {{ .Values.ingress.rateLimit.connections | default "5" | quote }}
+    nginx.ingress.kubernetes.io/rate-limit-window: {{ .Values.ingress.rateLimit.window | default "1m" | quote }}
+    {{- end }}
+    
+    # CORS 配置
+    {{- if .Values.ingress.cors.enabled }}
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: {{ .Values.ingress.cors.allowOrigin | default "*" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-methods: {{ .Values.ingress.cors.allowMethods | default "GET, POST, PUT, DELETE, OPTIONS" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-headers: {{ .Values.ingress.cors.allowHeaders | default "DNT,X-CustomHeader,Keep-Alive,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Authorization" | quote }}
+    nginx.ingress.kubernetes.io/cors-allow-credentials: {{ .Values.ingress.cors.allowCredentials | default "true" | quote }}
+    nginx.ingress.kubernetes.io/cors-max-age: {{ .Values.ingress.cors.maxAge | default "86400" | quote }}
+    {{- end }}
+    
+    # WebSocket 支持
+    {{- if .Values.ingress.websocket.enabled }}
+    nginx.ingress.kubernetes.io/proxy-set-headers: "nova-proxy-system/websocket-headers"
+    {{- end }}
+    
+    # gRPC 支持
+    {{- if .Values.ingress.grpc.enabled }}
+    nginx.ingress.kubernetes.io/grpc-backend: "true"
+    {{- end }}
+    
+    # 自定义配置片段
+    {{- if .Values.ingress.configurationSnippet }}
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      {{- .Values.ingress.configurationSnippet | nindent 6 }}
+    {{- end }}
+    
+    # 服务器片段
+    {{- if .Values.ingress.serverSnippet }}
+    nginx.ingress.kubernetes.io/server-snippet: |
+      {{- .Values.ingress.serverSnippet | nindent 6 }}
+    {{- end }}
+    {{- end }}
+    
+    # Traefik Ingress 注解
+    {{- if eq (.Values.ingress.className | default "nginx") "traefik" }}
+    traefik.ingress.kubernetes.io/router.entrypoints: {{ .Values.ingress.traefik.entrypoints | default "websecure" | quote }}
+    traefik.ingress.kubernetes.io/router.tls: {{ .Values.ingress.traefik.tls | default "true" | quote }}
+    {{- if .Values.ingress.traefik.middlewares }}
+    traefik.ingress.kubernetes.io/router.middlewares: {{ .Values.ingress.traefik.middlewares | quote }}
+    {{- end }}
+    {{- end }}
+    
+    # Cert-Manager 注解
+    {{- if .Values.ingress.tls.certManager.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.certManager.clusterIssuer | default "letsencrypt-prod" | quote }}
+    cert-manager.io/acme-challenge-type: {{ .Values.ingress.tls.certManager.challengeType | default "http01" | quote }}
+    {{- if .Values.ingress.tls.certManager.dnsNames }}
+    cert-manager.io/alt-names: {{ .Values.ingress.tls.certManager.dnsNames | join "," | quote }}
+    {{- end }}
+    {{- end }}
+    
+    # 自定义注解
+    {{- with .Values.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  {{- range .Values.ingress.hosts }}
+  - hosts:
+    - {{ .host | quote }}
+    {{- if .tls.secretName }}
+    secretName: {{ .tls.secretName }}
+    {{- else if $.Values.ingress.tls.secretName }}
+    secretName: {{ $.Values.ingress.tls.secretName }}
+    {{- else }}
+    secretName: {{ include "nova-proxy.fullname" $ }}-tls
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  
+  rules:
+  {{- range .Values.ingress.hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      {{- range .paths }}
+      - path: {{ .path | default "/" | quote }}
+        pathType: {{ .pathType | default "Prefix" }}
+        backend:
+          service:
+            name: {{ include "nova-proxy.fullname" $ }}
+            port:
+              {{- if .port }}
+              number: {{ .port }}
+              {{- else if .portName }}
+              name: {{ .portName }}
+              {{- else }}
+              number: {{ $.Values.service.ports.https | default 8080 }}
+              {{- end }}
+      {{- end }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy gRPC Ingress 模板
+用于 gRPC 服务的独立 Ingress
+*/}}
+{{- if and .Values.ingress.enabled .Values.ingress.grpc.enabled .Values.ingress.grpc.separateIngress }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-grpc
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: grpc
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    # Ingress 类
+    {{- if .Values.ingress.className }}
+    kubernetes.io/ingress.class: {{ .Values.ingress.className | quote }}
+    {{- end }}
+    
+    # gRPC 特定注解
+    {{- if eq (.Values.ingress.className | default "nginx") "nginx" }}
+    nginx.ingress.kubernetes.io/grpc-backend: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    {{- end }}
+    
+    # Cert-Manager 注解
+    {{- if .Values.ingress.tls.certManager.enabled }}
+    cert-manager.io/cluster-issuer: {{ .Values.ingress.tls.certManager.clusterIssuer | default "letsencrypt-prod" | quote }}
+    {{- end }}
+    
+    # 自定义注解
+    {{- with .Values.ingress.grpc.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+  {{- range .Values.ingress.grpc.hosts }}
+  - hosts:
+    - {{ .host | quote }}
+    {{- if .tls.secretName }}
+    secretName: {{ .tls.secretName }}
+    {{- else }}
+    secretName: {{ include "nova-proxy.fullname" $ }}-grpc-tls
+    {{- end }}
+  {{- end }}
+  {{- end }}
+  
+  rules:
+  {{- range .Values.ingress.grpc.hosts }}
+  - host: {{ .host | quote }}
+    http:
+      paths:
+      - path: {{ .path | default "/" | quote }}
+        pathType: {{ .pathType | default "Prefix" }}
+        backend:
+          service:
+            name: {{ include "nova-proxy.fullname" $ }}
+            port:
+              number: {{ $.Values.service.ports.grpc | default 9000 }}
+  {{- end }}
+{{- end }}
+
+---
+{{/*
+Nova Proxy WebSocket Headers ConfigMap
+用于 WebSocket 连接的自定义头部
+*/}}
+{{- if and .Values.ingress.enabled .Values.ingress.websocket.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: websocket-headers
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: websocket
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  Upgrade: $http_upgrade
+  Connection: "upgrade"
+  Host: $host
+  X-Real-IP: $remote_addr
+  X-Forwarded-For: $proxy_add_x_forwarded_for
+  X-Forwarded-Proto: $scheme
+  X-Forwarded-Port: $server_port
+  X-Forwarded-Host: $host
+  {{- with .Values.ingress.websocket.customHeaders }}
+  {{- range $key, $value := . }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}

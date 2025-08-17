@@ -1,0 +1,490 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-proxy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/part-of: nova-proxy
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: kubernetes
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    description: "Nova Proxy main deployment"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/instance: nova-proxy
+      app.kubernetes.io/component: proxy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nova-proxy
+        app.kubernetes.io/instance: nova-proxy
+        app.kubernetes.io/component: proxy
+        app.kubernetes.io/part-of: nova-proxy
+        app.kubernetes.io/version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        config.linkerd.io/proxy-cpu-limit: "0.5"
+        config.linkerd.io/proxy-memory-limit: "512Mi"
+        config.linkerd.io/proxy-cpu-request: "0.1"
+        config.linkerd.io/proxy-memory-request: "128Mi"
+    spec:
+      serviceAccountName: nova-proxy
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # 初始化容器
+      initContainers:
+        # 等待数据库就绪
+        - name: wait-for-postgres
+          image: postgres:15-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h $POSTGRES_HOST -p $POSTGRES_PORT -U $POSTGRES_USER; do
+                echo "Waiting for PostgreSQL to be ready..."
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+          env:
+            - name: POSTGRES_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: nova-proxy-env
+                  key: POSTGRES_HOST
+            - name: POSTGRES_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: nova-proxy-env
+                  key: POSTGRES_PORT
+            - name: POSTGRES_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: nova-proxy-env
+                  key: POSTGRES_USER
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+        
+        # 等待 Redis 就绪
+        - name: wait-for-redis
+          image: redis:7-alpine
+          command:
+            - sh
+            - -c
+            - |
+              until redis-cli -h $REDIS_HOST -p $REDIS_PORT ping; do
+                echo "Waiting for Redis to be ready..."
+                sleep 2
+              done
+              echo "Redis is ready!"
+          env:
+            - name: REDIS_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: nova-proxy-env
+                  key: REDIS_HOST
+            - name: REDIS_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: nova-proxy-env
+                  key: REDIS_PORT
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+        
+        # 数据库迁移
+        - name: db-migrate
+          image: nova-proxy:latest
+          command: ["/app/nova-proxy"]
+          args: ["migrate", "up"]
+          env:
+            - name: NOVA_ENV
+              value: "production"
+            - name: NOVA_CONFIG_PATH
+              value: "/etc/nova-proxy/config.yaml"
+          envFrom:
+            - configMapRef:
+                name: nova-proxy-env
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nova-proxy
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/nova-proxy/secrets
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/ssl/nova-proxy
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop:
+                - ALL
+      
+      containers:
+        # 主应用容器
+        - name: nova-proxy
+          image: nova-proxy:latest
+          imagePullPolicy: IfNotPresent
+          command: ["/app/nova-proxy"]
+          args: ["server"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: grpc
+              containerPort: 9000
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+            - name: admin
+              containerPort: 8082
+              protocol: TCP
+          env:
+            - name: NOVA_ENV
+              value: "production"
+            - name: NOVA_CONFIG_PATH
+              value: "/etc/nova-proxy/config.yaml"
+            - name: NOVA_SECRETS_PATH
+              value: "/etc/nova-proxy/secrets/secrets.yaml"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          envFrom:
+            - configMapRef:
+                name: nova-proxy-env
+          volumeMounts:
+            - name: config
+              mountPath: /etc/nova-proxy
+              readOnly: true
+            - name: secrets
+              mountPath: /etc/nova-proxy/secrets
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/ssl/nova-proxy
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: cache
+              mountPath: /var/cache/nova-proxy
+            - name: logs
+              mountPath: /var/log/nova-proxy
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+              ephemeral-storage: 5Gi
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: health
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            successThreshold: 1
+            failureThreshold: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    echo "Gracefully shutting down Nova Proxy..."
+                    kill -TERM 1
+                    sleep 15
+        
+        # Nginx 反向代理容器
+        - name: nginx
+          image: nginx:1.25-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: nginx-http
+              containerPort: 80
+              protocol: TCP
+            - name: nginx-https
+              containerPort: 443
+              protocol: TCP
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+            - name: tls-certs
+              mountPath: /etc/ssl/nginx
+              readOnly: true
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-logs
+              mountPath: /var/log/nginx
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /nginx-health
+              port: nginx-http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /nginx-health
+              port: nginx-http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+      
+      volumes:
+        # 配置文件
+        - name: config
+          configMap:
+            name: nova-proxy-config
+            defaultMode: 0644
+        
+        # 环境变量配置
+        - name: env-config
+          configMap:
+            name: nova-proxy-env
+            defaultMode: 0644
+        
+        # Nginx 配置
+        - name: nginx-config
+          configMap:
+            name: nova-proxy-nginx
+            defaultMode: 0644
+        
+        # 敏感配置
+        - name: secrets
+          secret:
+            secretName: nova-proxy-config-secrets
+            defaultMode: 0600
+        
+        # TLS 证书
+        - name: tls-certs
+          secret:
+            secretName: nova-proxy-tls
+            defaultMode: 0600
+        
+        # 临时目录
+        - name: tmp
+          emptyDir:
+            sizeLimit: 1Gi
+        
+        # 缓存目录
+        - name: cache
+          emptyDir:
+            sizeLimit: 2Gi
+        
+        # 日志目录
+        - name: logs
+          emptyDir:
+            sizeLimit: 5Gi
+        
+        # Nginx 缓存
+        - name: nginx-cache
+          emptyDir:
+            sizeLimit: 1Gi
+        
+        # Nginx 日志
+        - name: nginx-logs
+          emptyDir:
+            sizeLimit: 2Gi
+      
+      # 调度配置
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values: ["nova-proxy"]
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values: ["proxy"]
+                topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: node-role.kubernetes.io/worker
+                    operator: Exists
+            - weight: 30
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+      
+      # 容忍度
+      tolerations:
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 300
+      
+      # DNS 配置
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+          - name: ndots
+            value: "2"
+          - name: edns0
+      
+      # 重启策略
+      restartPolicy: Always
+      
+      # 终止宽限期
+      terminationGracePeriodSeconds: 30
+      
+      # 镜像拉取密钥
+      imagePullSecrets:
+        - name: nova-proxy-registry
+      
+      # 主机网络
+      hostNetwork: false
+      hostPID: false
+      hostIPC: false
+      
+      # 优先级
+      priorityClassName: system-cluster-critical

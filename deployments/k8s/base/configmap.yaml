@@ -1,0 +1,599 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-proxy-config
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: nova-proxy
+data:
+  # 主配置文件
+  config.yaml: |
+    # Nova Proxy 生产环境配置
+    server:
+      addr: "0.0.0.0:8080"
+      https_addr: "0.0.0.0:8443"
+      health_addr: "0.0.0.0:8081"
+      metrics_addr: "0.0.0.0:9090"
+      
+      # 连接配置
+      max_connections: 10000
+      read_timeout: 30s
+      write_timeout: 30s
+      idle_timeout: 120s
+      
+      # TLS 配置
+      tls:
+        cert_file: "/etc/ssl/nova-proxy/tls.crt"
+        key_file: "/etc/ssl/nova-proxy/tls.key"
+        ca_file: "/etc/ssl/nova-proxy/ca.crt"
+        min_version: "1.2"
+        max_version: "1.3"
+        cipher_suites:
+          - "TLS_AES_256_GCM_SHA384"
+          - "TLS_CHACHA20_POLY1305_SHA256"
+          - "TLS_AES_128_GCM_SHA256"
+        
+        # 证书轮换
+        auto_reload: true
+        reload_interval: 24h
+    
+    # 代理配置
+    proxy:
+      # 流量塑形
+      traffic_shaping:
+        enabled: true
+        rate_limit: "100MB/s"
+        burst_limit: "200MB"
+        
+        # 连接限制
+        max_connections_per_ip: 100
+        max_requests_per_second: 1000
+        
+        # 超时配置
+        connect_timeout: 10s
+        request_timeout: 30s
+        response_timeout: 60s
+      
+      # 负载均衡
+      load_balancing:
+        algorithm: "round_robin"  # round_robin, least_connections, ip_hash
+        health_check:
+          enabled: true
+          interval: 30s
+          timeout: 5s
+          unhealthy_threshold: 3
+          healthy_threshold: 2
+          path: "/health"
+      
+      # 缓存配置
+      cache:
+        enabled: true
+        type: "redis"  # memory, redis
+        ttl: 3600s
+        max_size: "1GB"
+    
+    # 日志配置
+    logging:
+      level: "info"  # debug, info, warn, error
+      format: "json"  # text, json
+      
+      # 文件输出
+      file:
+        enabled: true
+        path: "/var/log/nova-proxy/nova.log"
+        max_size: 100MB
+        max_backups: 10
+        max_age: 30
+        compress: true
+      
+      # 控制台输出
+      console:
+        enabled: true
+        color: false
+      
+      # 敏感信息脱敏
+      sanitize:
+        enabled: true
+        fields:
+          - "password"
+          - "token"
+          - "secret"
+          - "key"
+    
+    # 指标配置
+    metrics:
+      enabled: true
+      addr: "0.0.0.0:9090"
+      path: "/metrics"
+      
+      # Prometheus 配置
+      prometheus:
+        enabled: true
+        namespace: "nova_proxy"
+        subsystem: "server"
+        
+        # 自定义标签
+        labels:
+          service: "nova-proxy"
+          environment: "production"
+          version: "1.0.0"
+    
+    # 追踪配置
+    tracing:
+      enabled: true
+      type: "jaeger"  # jaeger, zipkin, otlp
+      
+      # Jaeger 配置
+      jaeger:
+        endpoint: "http://jaeger-collector:14268/api/traces"
+        service_name: "nova-proxy"
+        sample_rate: 0.1
+        
+        # 标签
+        tags:
+          service.name: "nova-proxy"
+          service.version: "1.0.0"
+          deployment.environment: "production"
+    
+    # 健康检查配置
+    health:
+      enabled: true
+      addr: "0.0.0.0:8081"
+      path: "/health"
+      
+      # 检查项
+      checks:
+        - name: "database"
+          type: "tcp"
+          target: "postgres:5432"
+          timeout: 5s
+          interval: 30s
+        
+        - name: "redis"
+          type: "tcp"
+          target: "redis:6379"
+          timeout: 5s
+          interval: 30s
+        
+        - name: "disk_space"
+          type: "disk"
+          path: "/var/log"
+          threshold: 80  # 80% 使用率告警
+          interval: 60s
+    
+    # 安全配置
+    security:
+      # 访问控制
+      access_control:
+        enabled: true
+        default_policy: "deny"
+        
+        # IP 白名单
+        allow_ips:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+        
+        # IP 黑名单
+        deny_ips:
+          - "0.0.0.0/0"  # 默认拒绝所有，通过白名单允许
+      
+      # 认证配置
+      authentication:
+        enabled: true
+        type: "jwt"  # basic, jwt, oauth2
+        
+        # JWT 配置
+        jwt:
+          secret_key: "${JWT_SECRET_KEY}"
+          expiry: 24h
+          issuer: "nova-proxy"
+          audience: "nova-proxy-users"
+      
+      # CORS 配置
+      cors:
+        enabled: true
+        allowed_origins:
+          - "https://*.nova-proxy.io"
+        allowed_methods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+        allowed_headers:
+          - "Content-Type"
+          - "Authorization"
+        max_age: 86400
+    
+    # 性能配置
+    performance:
+      # Go 运行时
+      go:
+        max_procs: 0  # 0 = 使用所有可用 CPU
+        gc_percent: 100
+        
+      # 连接池
+      connection_pool:
+        max_idle_conns: 100
+        max_open_conns: 1000
+        conn_max_lifetime: 3600s
+        
+      # 缓冲区
+      buffers:
+        read_buffer_size: 4096
+        write_buffer_size: 4096
+        
+      # 内存限制
+      memory:
+        max_heap_size: "2GB"
+        gc_target_percent: 75
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-proxy-env
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: env-config
+    app.kubernetes.io/part-of: nova-proxy
+data:
+  # 基础配置
+  NOVA_ENV: "production"
+  NOVA_LOG_LEVEL: "info"
+  NOVA_LOG_FORMAT: "json"
+  
+  # 服务端口
+  NOVA_SERVER_ADDR: "0.0.0.0:8080"
+  NOVA_HTTPS_ADDR: "0.0.0.0:8443"
+  NOVA_HEALTH_ADDR: "0.0.0.0:8081"
+  NOVA_METRICS_ADDR: "0.0.0.0:9090"
+  
+  # TLS 配置
+  NOVA_TLS_CERT_FILE: "/etc/ssl/nova-proxy/tls.crt"
+  NOVA_TLS_KEY_FILE: "/etc/ssl/nova-proxy/tls.key"
+  NOVA_TLS_CA_FILE: "/etc/ssl/nova-proxy/ca.crt"
+  
+  # 数据库配置
+  POSTGRES_HOST: "postgres"
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: "nova_proxy"
+  POSTGRES_USER: "nova_proxy"
+  POSTGRES_SSLMODE: "require"
+  
+  # Redis 配置
+  REDIS_HOST: "redis"
+  REDIS_PORT: "6379"
+  REDIS_DB: "0"
+  
+  # 监控配置
+  PROMETHEUS_ENABLED: "true"
+  JAEGER_ENDPOINT: "http://jaeger-collector:14268/api/traces"
+  JAEGER_SERVICE_NAME: "nova-proxy"
+  JAEGER_SAMPLE_RATE: "0.1"
+  
+  # 性能配置
+  GOMAXPROCS: "0"
+  GOGC: "100"
+  
+  # 时区
+  TZ: "Asia/Shanghai"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-proxy-nginx
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: nginx-config
+    app.kubernetes.io/part-of: nova-proxy
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes auto;
+    error_log /var/log/nginx/error.log warn;
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections 1024;
+        use epoll;
+        multi_accept on;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        # 日志格式
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for"';
+        
+        access_log /var/log/nginx/access.log main;
+        
+        # 基础配置
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout 65;
+        types_hash_max_size 2048;
+        
+        # Gzip 压缩
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+        
+        # 上游服务器
+        upstream nova_proxy_backend {
+            least_conn;
+            server nova-proxy-server:8080 max_fails=3 fail_timeout=30s;
+            server nova-proxy-server:8080 max_fails=3 fail_timeout=30s backup;
+        }
+        
+        # HTTP 服务器
+        server {
+            listen 80;
+            server_name _;
+            
+            # 重定向到 HTTPS
+            return 301 https://$server_name$request_uri;
+        }
+        
+        # HTTPS 服务器
+        server {
+            listen 443 ssl http2;
+            server_name _;
+            
+            # SSL 配置
+            ssl_certificate /etc/ssl/nova-proxy/tls.crt;
+            ssl_certificate_key /etc/ssl/nova-proxy/tls.key;
+            ssl_protocols TLSv1.2 TLSv1.3;
+            ssl_ciphers ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256;
+            ssl_prefer_server_ciphers off;
+            
+            # HSTS
+            add_header Strict-Transport-Security "max-age=63072000" always;
+            
+            # 安全头
+            add_header X-Frame-Options DENY;
+            add_header X-Content-Type-Options nosniff;
+            add_header X-XSS-Protection "1; mode=block";
+            
+            # 代理配置
+            location / {
+                proxy_pass http://nova_proxy_backend;
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                
+                # 超时配置
+                proxy_connect_timeout 30s;
+                proxy_send_timeout 30s;
+                proxy_read_timeout 30s;
+                
+                # 缓冲配置
+                proxy_buffering on;
+                proxy_buffer_size 4k;
+                proxy_buffers 8 4k;
+            }
+            
+            # 健康检查
+            location /health {
+                proxy_pass http://nova-proxy-server:8081/health;
+                access_log off;
+            }
+            
+            # 指标端点
+            location /metrics {
+                proxy_pass http://nova-proxy-server:9090/metrics;
+                allow 10.0.0.0/8;
+                allow 172.16.0.0/12;
+                allow 192.168.0.0/16;
+                deny all;
+            }
+        }
+    }
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-proxy-scripts
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: scripts
+    app.kubernetes.io/part-of: nova-proxy
+data:
+  entrypoint.sh: |
+    #!/bin/bash
+    set -e
+    
+    # 颜色定义
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    NC='\033[0m'
+    
+    log_info() {
+        echo -e "${BLUE}[INFO]${NC} $1"
+    }
+    
+    log_warn() {
+        echo -e "${YELLOW}[WARN]${NC} $1"
+    }
+    
+    log_error() {
+        echo -e "${RED}[ERROR]${NC} $1"
+    }
+    
+    log_success() {
+        echo -e "${GREEN}[SUCCESS]${NC} $1"
+    }
+    
+    # 等待依赖服务
+    wait_for_service() {
+        local host=$1
+        local port=$2
+        local timeout=${3:-30}
+        
+        log_info "等待服务 $host:$port 就绪..."
+        
+        for i in $(seq 1 $timeout); do
+            if nc -z "$host" "$port" 2>/dev/null; then
+                log_success "服务 $host:$port 已就绪"
+                return 0
+            fi
+            
+            log_info "等待服务 $host:$port ($i/$timeout)..."
+            sleep 1
+        done
+        
+        log_error "服务 $host:$port 超时未就绪"
+        return 1
+    }
+    
+    # 检查证书文件
+    check_certificates() {
+        log_info "检查 TLS 证书..."
+        
+        if [[ ! -f "$NOVA_TLS_CERT_FILE" ]]; then
+            log_error "证书文件不存在: $NOVA_TLS_CERT_FILE"
+            return 1
+        fi
+        
+        if [[ ! -f "$NOVA_TLS_KEY_FILE" ]]; then
+            log_error "私钥文件不存在: $NOVA_TLS_KEY_FILE"
+            return 1
+        fi
+        
+        # 检查证书有效期
+        if command -v openssl >/dev/null 2>&1; then
+            local expiry_date
+            expiry_date=$(openssl x509 -in "$NOVA_TLS_CERT_FILE" -noout -enddate | cut -d= -f2)
+            log_info "证书过期时间: $expiry_date"
+            
+            # 检查证书是否即将过期（30天内）
+            local expiry_timestamp
+            expiry_timestamp=$(date -d "$expiry_date" +%s 2>/dev/null || echo "0")
+            local current_timestamp
+            current_timestamp=$(date +%s)
+            local days_until_expiry
+            days_until_expiry=$(( (expiry_timestamp - current_timestamp) / 86400 ))
+            
+            if [[ $days_until_expiry -lt 30 ]]; then
+                log_warn "证书将在 $days_until_expiry 天后过期"
+            fi
+        fi
+        
+        log_success "证书检查完成"
+    }
+    
+    # 创建必要的目录
+    create_directories() {
+        log_info "创建必要的目录..."
+        
+        mkdir -p /var/log/nova-proxy
+        mkdir -p /var/lib/nova-proxy
+        mkdir -p /tmp/nova-proxy
+        
+        # 设置权限
+        chmod 755 /var/log/nova-proxy
+        chmod 755 /var/lib/nova-proxy
+        chmod 755 /tmp/nova-proxy
+        
+        log_success "目录创建完成"
+    }
+    
+    # 预检查
+    pre_flight_check() {
+        log_info "执行预检查..."
+        
+        # 检查配置文件
+        if [[ ! -f "/etc/nova-proxy/config.yaml" ]]; then
+            log_error "配置文件不存在: /etc/nova-proxy/config.yaml"
+            exit 1
+        fi
+        
+        # 检查端口是否可用
+        local ports=("8080" "8443" "8081" "9090")
+        for port in "${ports[@]}"; do
+            if ss -tuln | grep -q ":$port "; then
+                log_warn "端口 $port 已被占用"
+            fi
+        done
+        
+        log_success "预检查完成"
+    }
+    
+    # 主函数
+    main() {
+        log_info "启动 Nova Proxy 服务器..."
+        
+        # 执行预检查
+        pre_flight_check
+        create_directories
+        
+        # 等待依赖服务（如果配置了）
+        if [[ -n "$POSTGRES_HOST" ]]; then
+            wait_for_service "$POSTGRES_HOST" "${POSTGRES_PORT:-5432}"
+        fi
+        
+        if [[ -n "$REDIS_HOST" ]]; then
+            wait_for_service "$REDIS_HOST" "${REDIS_PORT:-6379}"
+        fi
+        
+        # 检查证书
+        if [[ -n "$NOVA_TLS_CERT_FILE" ]]; then
+            check_certificates
+        fi
+        
+        # 启动应用
+        log_info "启动 Nova Proxy 服务器..."
+        exec "$@"
+    }
+    
+    # 信号处理
+    trap 'log_info "收到终止信号，正在关闭..."; exit 0' SIGTERM SIGINT
+    
+    # 运行主函数
+    main "$@"
+  
+  healthcheck.sh: |
+    #!/bin/bash
+    # 健康检查脚本
+    
+    set -e
+    
+    HEALTH_URL="http://localhost:${NOVA_HEALTH_PORT:-8081}/health"
+    TIMEOUT=${HEALTH_TIMEOUT:-5}
+    
+    # 检查健康端点
+    if curl -f -s --max-time "$TIMEOUT" "$HEALTH_URL" >/dev/null 2>&1; then
+        exit 0
+    else
+        echo "健康检查失败: $HEALTH_URL"
+        exit 1
+    fi

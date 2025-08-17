@@ -1,0 +1,230 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 元数据
+metadata:
+  name: nova-proxy-base
+  annotations:
+    config.kubernetes.io/local-config: "true"
+
+# 命名空间
+namespace: nova-proxy
+
+# 通用标签
+commonLabels:
+  app.kubernetes.io/name: nova-proxy
+  app.kubernetes.io/instance: nova-proxy
+  app.kubernetes.io/part-of: nova-proxy
+  app.kubernetes.io/managed-by: kustomize
+
+# 通用注解
+commonAnnotations:
+  config.kubernetes.io/origin: |
+    path: deployments/k8s/base/kustomization.yaml
+  app.kubernetes.io/version: "1.0.0"
+
+# 资源列表
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - secret.yaml
+  - pv.yaml
+  - deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+
+# 镜像配置
+images:
+  - name: nova-proxy
+    newName: nova-proxy
+    newTag: latest
+  - name: nginx
+    newName: nginx
+    newTag: 1.25-alpine
+  - name: postgres
+    newName: postgres
+    newTag: 15-alpine
+  - name: redis
+    newName: redis
+    newTag: 7-alpine
+
+# 名称前缀
+namePrefix: ""
+
+# 名称后缀
+nameSuffix: ""
+
+# 副本数配置
+replicas:
+  - name: nova-proxy
+    count: 3
+
+# 配置生成器
+configMapGenerator:
+  - name: nova-proxy-build-info
+    literals:
+      - BUILD_VERSION=1.0.0
+      - BUILD_COMMIT=unknown
+      - BUILD_DATE=unknown
+      - BUILD_USER=kustomize
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/component: build-info
+
+# 密钥生成器
+secretGenerator:
+  - name: nova-proxy-generated-secrets
+    literals:
+      - RANDOM_KEY=changeme
+      - SESSION_SECRET=changeme
+    type: Opaque
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/component: generated-secrets
+
+# 补丁配置
+patches:
+  # 为 Deployment 添加资源限制
+  - target:
+      kind: Deployment
+      name: nova-proxy
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "2000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "2Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "500m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "512Mi"
+
+  # 为 Service 添加注解
+  - target:
+      kind: Service
+      name: nova-proxy
+    patch: |
+      - op: add
+        path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-type
+        value: "nlb"
+      - op: add
+        path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-scheme
+        value: "internet-facing"
+
+# 策略合并配置
+patchesStrategicMerge:
+  # 可以在这里添加 YAML 补丁文件
+
+# JSON 6902 补丁
+patchesJson6902:
+  # 为 Ingress 添加 TLS 配置
+  - target:
+      version: v1
+      kind: Ingress
+      name: nova-proxy
+    patch: |
+      - op: add
+        path: /spec/tls/0/secretName
+        value: nova-proxy-tls-cert
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: letsencrypt-prod
+
+# 变量替换
+vars:
+  - name: NOVA_PROXY_VERSION
+    objref:
+      kind: ConfigMap
+      name: nova-proxy-build-info
+      apiVersion: v1
+    fieldref:
+      fieldpath: data.BUILD_VERSION
+  - name: NOVA_PROXY_NAMESPACE
+    objref:
+      kind: Namespace
+      name: nova-proxy
+      apiVersion: v1
+    fieldref:
+      fieldpath: metadata.name
+
+# 替换配置
+replacements:
+  - source:
+      kind: ConfigMap
+      name: nova-proxy-build-info
+      fieldPath: data.BUILD_VERSION
+    targets:
+      - select:
+          kind: Deployment
+          name: nova-proxy
+        fieldPaths:
+          - spec.template.metadata.labels.[app.kubernetes.io/version]
+      - select:
+          kind: Service
+        fieldPaths:
+          - metadata.labels.[app.kubernetes.io/version]
+
+# 生成器选项
+generatorOptions:
+  # 禁用名称后缀哈希
+  disableNameSuffixHash: false
+  # 标签
+  labels:
+    generator: kustomize
+  # 注解
+  annotations:
+    generated-by: kustomize
+
+# 构建元数据
+buildMetadata:
+  - managedByLabel
+  - originAnnotations
+
+# 组件
+components: []
+
+# Helm 图表
+helmCharts: []
+
+# 开放 API
+openapi:
+  path: https://k8s.io/apimachinery/pkg/runtime/schema/openapi_v2.json
+
+# 排序选项
+sortOptions:
+  order: legacy
+  legacySortOptions:
+    orderFirst:
+      - Namespace
+      - ResourceQuota
+      - StorageClass
+      - CustomResourceDefinition
+      - ServiceAccount
+      - PodSecurityPolicy
+      - Role
+      - ClusterRole
+      - RoleBinding
+      - ClusterRoleBinding
+      - ConfigMap
+      - Secret
+      - Endpoints
+      - Service
+      - LimitRange
+      - PriorityClass
+      - PersistentVolume
+      - PersistentVolumeClaim
+      - Deployment
+      - StatefulSet
+      - CronJob
+      - PodDisruptionBudget
+    orderLast:
+      - MutatingWebhookConfiguration
+      - ValidatingWebhookConfiguration

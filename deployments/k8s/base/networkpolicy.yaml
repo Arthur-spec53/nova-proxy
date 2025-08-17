@@ -1,0 +1,461 @@
+# 默认拒绝所有入站流量的网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-default-deny-ingress
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+
+---
+# 默认拒绝所有出站流量的网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-default-deny-egress
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: default-deny
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+
+---
+# Nova Proxy 应用的网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-app-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: proxy
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # 允许来自 Ingress Controller 的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    
+    # 允许来自同一命名空间的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: nova-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8082
+    
+    # 允许来自监控系统的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    
+    # 允许来自负载均衡器的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+        - podSelector:
+            matchLabels:
+              app: aws-load-balancer-controller
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443
+    
+    # 允许健康检查流量
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8081
+  
+  egress:
+    # 允许 DNS 查询
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # 允许访问 PostgreSQL
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: database
+        - podSelector:
+            matchLabels:
+              app: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+    
+    # 允许访问 Redis
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cache
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    
+    # 允许访问外部 HTTPS 服务
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+    
+    # 允许访问外部 HTTP 服务（仅用于健康检查）
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 80
+    
+    # 允许访问 SMTP 服务
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 587
+        - protocol: TCP
+          port: 465
+    
+    # 允许访问时间同步服务
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 123
+
+---
+# 监控系统的网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-monitoring-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: monitoring
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # 允许来自 Prometheus 的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+    
+    # 允许来自 Grafana 的流量
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+        - podSelector:
+            matchLabels:
+              app: grafana
+      ports:
+        - protocol: TCP
+          port: 9090
+  
+  egress:
+    # 允许 DNS 查询
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+        - podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    
+    # 允许访问应用指标
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: nova-proxy
+              app.kubernetes.io/component: proxy
+      ports:
+        - protocol: TCP
+          port: 9090
+
+---
+# 数据库访问网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-database-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: database
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: proxy
+  policyTypes:
+    - Egress
+  
+  egress:
+    # 允许访问 PostgreSQL
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: database
+      ports:
+        - protocol: TCP
+          port: 5432
+    
+    # 允许访问外部数据库（如 RDS）
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# 缓存访问网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-cache-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: cache
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: proxy
+  policyTypes:
+    - Egress
+  
+  egress:
+    # 允许访问 Redis
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: cache
+      ports:
+        - protocol: TCP
+          port: 6379
+    
+    # 允许访问外部缓存（如 ElastiCache）
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# 外部服务访问网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-external-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: external
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: proxy
+  policyTypes:
+    - Egress
+  
+  egress:
+    # 允许访问外部 API
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 80
+    
+    # 允许访问邮件服务
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 587  # SMTP with STARTTLS
+        - protocol: TCP
+          port: 465  # SMTPS
+        - protocol: TCP
+          port: 25   # SMTP
+    
+    # 允许访问时间同步
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 123  # NTP
+
+---
+# 开发环境网络策略（更宽松）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-dev-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: development
+    environment: development
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      environment: development
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # 允许所有入站流量（开发环境）
+    - from: []
+  
+  egress:
+    # 允许所有出站流量（开发环境）
+    - to: []
+
+---
+# 紧急访问网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-emergency-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: network-policy
+    app.kubernetes.io/part-of: nova-proxy
+    policy-type: emergency
+  annotations:
+    emergency.nova-proxy.io/enabled: "false"
+    emergency.nova-proxy.io/reason: "Emergency access for troubleshooting"
+    emergency.nova-proxy.io/approved-by: "security-team"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      emergency-access: "enabled"
+  policyTypes:
+    - Ingress
+    - Egress
+  
+  ingress:
+    # 允许来自运维团队的访问
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ops-tools
+        - podSelector:
+            matchLabels:
+              role: troubleshooting
+      ports:
+        - protocol: TCP
+          port: 22   # SSH
+        - protocol: TCP
+          port: 8082 # Admin interface
+  
+  egress:
+    # 允许访问日志收集系统
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: logging
+      ports:
+        - protocol: TCP
+          port: 9200  # Elasticsearch
+        - protocol: TCP
+          port: 5044  # Logstash

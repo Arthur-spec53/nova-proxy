@@ -1,0 +1,315 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 元数据
+metadata:
+  name: nova-proxy-prod
+  annotations:
+    config.kubernetes.io/local-config: "true"
+    environment: production
+
+# 基础配置
+bases:
+  - ../../base
+
+# 命名空间覆盖
+namespace: nova-proxy
+
+# 生产环境标签
+commonLabels:
+  environment: production
+  tier: prod
+
+# 生产环境注解
+commonAnnotations:
+  environment: production
+  deployment.kubernetes.io/revision: "1"
+  config.kubernetes.io/origin: |
+    path: deployments/k8s/overlays/prod/kustomization.yaml
+
+# 名称前缀
+namePrefix: ""
+
+# 副本数（生产环境高可用）
+replicas:
+  - name: nova-proxy
+    count: 5
+
+# 镜像配置（生产环境使用稳定版本）
+images:
+  - name: nova-proxy
+    newName: nova-proxy
+    newTag: v1.0.0
+  - name: nginx
+    newName: nginx
+    newTag: 1.25-alpine
+
+# 生产环境配置生成器
+configMapGenerator:
+  - name: nova-proxy-prod-config
+    literals:
+      - NOVA_ENV=production
+      - NOVA_LOG_LEVEL=info
+      - NOVA_DEBUG=false
+      - NOVA_METRICS_ENABLED=true
+      - NOVA_TRACING_ENABLED=true
+      - NOVA_PROFILING_ENABLED=false
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/component: prod-config
+        environment: production
+
+  - name: nova-proxy-prod-env
+    literals:
+      - POSTGRES_HOST=postgres.database.svc.cluster.local
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=nova_proxy
+      - POSTGRES_USER=nova_proxy
+      - REDIS_HOST=redis.cache.svc.cluster.local
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/component: prod-env
+        environment: production
+
+# 生产环境密钥（使用外部密钥管理）
+secretGenerator:
+  - name: nova-proxy-prod-secrets
+    files:
+      - postgres-password=secrets/postgres-password.txt
+      - redis-password=secrets/redis-password.txt
+      - jwt-secret=secrets/jwt-secret.txt
+      - api-key=secrets/api-key.txt
+      - encryption-key=secrets/encryption-key.txt
+    type: Opaque
+    options:
+      disableNameSuffixHash: true
+      labels:
+        app.kubernetes.io/component: prod-secrets
+        environment: production
+
+# 生产环境补丁
+patches:
+  # 提高资源限制
+  - target:
+      kind: Deployment
+      name: nova-proxy
+    patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: "4000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: "4Gi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "1000m"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "1Gi"
+
+  # 使用 LoadBalancer 服务类型
+  - target:
+      kind: Service
+      name: nova-proxy
+    patch: |
+      - op: replace
+        path: /spec/type
+        value: LoadBalancer
+      - op: add
+        path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-type
+        value: "nlb"
+      - op: add
+        path: /metadata/annotations/service.beta.kubernetes.io~1aws-load-balancer-scheme
+        value: "internet-facing"
+
+  # 生产环境 HPA 配置
+  - target:
+      kind: HorizontalPodAutoscaler
+      name: nova-proxy-hpa
+    patch: |
+      - op: replace
+        path: /spec/minReplicas
+        value: 5
+      - op: replace
+        path: /spec/maxReplicas
+        value: 20
+      - op: replace
+        path: /spec/metrics/0/resource/target/averageUtilization
+        value: 70
+
+  # 生产环境 Ingress 配置
+  - target:
+      kind: Ingress
+      name: nova-proxy
+    patch: |
+      - op: replace
+        path: /spec/rules/0/host
+        value: nova-proxy.com
+      - op: replace
+        path: /spec/rules/1/host
+        value: api.nova-proxy.com
+      - op: replace
+        path: /spec/rules/2/host
+        value: admin.nova-proxy.com
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1cluster-issuer
+        value: letsencrypt-prod
+
+# 策略合并补丁
+patchesStrategicMerge:
+  - prod-deployment-patch.yaml
+  - prod-service-patch.yaml
+  - prod-configmap-patch.yaml
+  - prod-security-patch.yaml
+
+# JSON 6902 补丁
+patchesJson6902:
+  # 添加生产环境特定的环境变量
+  - target:
+      version: v1
+      kind: Deployment
+      name: nova-proxy
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NOVA_PROD_MODE
+          value: "true"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NOVA_HOT_RELOAD
+          value: "false"
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: NOVA_CORS_ORIGINS
+          value: "https://nova-proxy.com,https://api.nova-proxy.com"
+
+  # 添加生产环境安全策略
+  - target:
+      version: v1
+      kind: NetworkPolicy
+      name: nova-proxy-allow-ingress
+    patch: |
+      - op: add
+        path: /spec/ingress/0/from/-
+        value:
+          namespaceSelector:
+            matchLabels:
+              name: cert-manager
+
+# 变量替换
+vars:
+  - name: PROD_NAMESPACE
+    objref:
+      kind: Namespace
+      name: nova-proxy
+      apiVersion: v1
+    fieldref:
+      fieldpath: metadata.name
+
+# 替换配置
+replacements:
+  - source:
+      kind: ConfigMap
+      name: nova-proxy-prod-config
+      fieldPath: data.NOVA_ENV
+    targets:
+      - select:
+          kind: Deployment
+          name: nova-proxy
+        fieldPaths:
+          - spec.template.spec.containers.[name=nova-proxy].env.[name=NOVA_ENV].value
+
+# 资源
+resources:
+  - prod-namespace.yaml
+  - prod-ingress.yaml
+  - prod-service-monitor.yaml
+  - prod-backup.yaml
+  - prod-certificates.yaml
+
+# 组件
+components:
+  - ../../components/monitoring
+  - ../../components/security
+  - ../../components/backup
+
+# 生成器选项
+generatorOptions:
+  disableNameSuffixHash: true
+  labels:
+    environment: production
+    generator: kustomize-prod
+  annotations:
+    generated-by: kustomize-prod
+    environment: production
+
+# Helm 图表（如果需要）
+helmCharts:
+  - name: cert-manager
+    repo: https://charts.jetstack.io
+    version: v1.13.0
+    namespace: cert-manager
+    includeCRDs: true
+    valuesInline:
+      installCRDs: true
+      global:
+        leaderElection:
+          namespace: cert-manager
+  
+  - name: prometheus
+    repo: https://prometheus-community.github.io/helm-charts
+    version: 25.0.0
+    namespace: monitoring
+    valuesInline:
+      server:
+        persistentVolume:
+          enabled: true
+          size: 50Gi
+      alertmanager:
+        enabled: true
+        persistentVolume:
+          enabled: true
+          size: 10Gi
+
+# 构建元数据
+buildMetadata:
+  - managedByLabel
+  - originAnnotations
+
+# 排序选项
+sortOptions:
+  order: legacy
+  legacySortOptions:
+    orderFirst:
+      - Namespace
+      - ResourceQuota
+      - StorageClass
+      - CustomResourceDefinition
+      - ServiceAccount
+      - PodSecurityPolicy
+      - Role
+      - ClusterRole
+      - RoleBinding
+      - ClusterRoleBinding
+      - ConfigMap
+      - Secret
+      - Endpoints
+      - Service
+      - LimitRange
+      - PriorityClass
+      - PersistentVolume
+      - PersistentVolumeClaim
+      - Deployment
+      - StatefulSet
+      - CronJob
+      - PodDisruptionBudget
+    orderLast:
+      - MutatingWebhookConfiguration
+      - ValidatingWebhookConfiguration

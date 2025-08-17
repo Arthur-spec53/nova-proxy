@@ -1,0 +1,266 @@
+# Nova Proxy Kubernetes HPA 和 PDB 配置
+# HorizontalPodAutoscaler - 水平Pod自动扩缩容
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nova-proxy-hpa
+  labels:
+    app: nova-proxy
+    component: autoscaling
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-proxy
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  # CPU 使用率指标
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  # 内存使用率指标
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  # 自定义指标：QUIC 连接数
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_active_connections
+      target:
+        type: AverageValue
+        averageValue: "1000"
+  # 自定义指标：请求速率
+  - type: Pods
+    pods:
+      metric:
+        name: nova_proxy_requests_per_second
+      target:
+        type: AverageValue
+        averageValue: "100"
+  # 外部指标：队列长度
+  - type: External
+    external:
+      metric:
+        name: nova_proxy_queue_length
+        selector:
+          matchLabels:
+            app: nova-proxy
+      target:
+        type: AverageValue
+        averageValue: "50"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # 5分钟稳定窗口
+      policies:
+      - type: Percent
+        value: 10  # 每次最多缩容10%
+        periodSeconds: 60
+      - type: Pods
+        value: 2   # 每次最多缩容2个Pod
+        periodSeconds: 60
+      selectPolicy: Min  # 选择最保守的策略
+    scaleUp:
+      stabilizationWindowSeconds: 60   # 1分钟稳定窗口
+      policies:
+      - type: Percent
+        value: 50  # 每次最多扩容50%
+        periodSeconds: 60
+      - type: Pods
+        value: 4   # 每次最多扩容4个Pod
+        periodSeconds: 60
+      selectPolicy: Max  # 选择最激进的策略
+
+---
+# VerticalPodAutoscaler - 垂直Pod自动扩缩容（可选）
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: nova-proxy-vpa
+  labels:
+    app: nova-proxy
+    component: vpa
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-proxy
+  updatePolicy:
+    updateMode: "Auto"  # 自动更新模式
+  resourcePolicy:
+    containerPolicies:
+    - containerName: nova-proxy
+      minAllowed:
+        cpu: 100m
+        memory: 128Mi
+      maxAllowed:
+        cpu: 2
+        memory: 2Gi
+      controlledResources: ["cpu", "memory"]
+      controlledValues: RequestsAndLimits
+
+---
+# PodDisruptionBudget - Pod中断预算
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nova-proxy-pdb
+  labels:
+    app: nova-proxy
+    component: disruption-budget
+spec:
+  minAvailable: 2  # 至少保持2个Pod可用
+  # 或者使用百分比：minAvailable: 50%
+  selector:
+    matchLabels:
+      app: nova-proxy
+      component: server
+
+---
+# ServiceMonitor - Prometheus 监控配置
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nova-proxy-metrics
+  labels:
+    app: nova-proxy
+    component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: nova-proxy
+      component: metrics
+  endpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+    metricRelabelings:
+    - sourceLabels: [__name__]
+      regex: 'nova_proxy_.*'
+      action: keep
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_pod_node_name]
+      targetLabel: node
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+
+---
+# PrometheusRule - 告警规则
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nova-proxy-alerts
+  labels:
+    app: nova-proxy
+    component: alerting
+spec:
+  groups:
+  - name: nova-proxy.rules
+    rules:
+    # 高CPU使用率告警
+    - alert: NovaProxyHighCPU
+      expr: rate(container_cpu_usage_seconds_total{pod=~"nova-proxy-.*"}[5m]) > 0.8
+      for: 5m
+      labels:
+        severity: warning
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy high CPU usage"
+        description: "Nova Proxy pod {{ $labels.pod }} has high CPU usage: {{ $value }}"
+    
+    # 高内存使用率告警
+    - alert: NovaProxyHighMemory
+      expr: container_memory_usage_bytes{pod=~"nova-proxy-.*"} / container_spec_memory_limit_bytes > 0.9
+      for: 5m
+      labels:
+        severity: warning
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy high memory usage"
+        description: "Nova Proxy pod {{ $labels.pod }} has high memory usage: {{ $value }}"
+    
+    # Pod重启告警
+    - alert: NovaProxyPodRestarting
+      expr: rate(kube_pod_container_status_restarts_total{pod=~"nova-proxy-.*"}[15m]) > 0
+      for: 5m
+      labels:
+        severity: warning
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy pod restarting"
+        description: "Nova Proxy pod {{ $labels.pod }} is restarting frequently"
+    
+    # 服务不可用告警
+    - alert: NovaProxyDown
+      expr: up{job="nova-proxy"} == 0
+      for: 1m
+      labels:
+        severity: critical
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy is down"
+        description: "Nova Proxy instance {{ $labels.instance }} is down"
+    
+    # 高连接数告警
+    - alert: NovaProxyHighConnections
+      expr: nova_proxy_active_connections > 8000
+      for: 5m
+      labels:
+        severity: warning
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy high connection count"
+        description: "Nova Proxy has {{ $value }} active connections"
+    
+    # 高错误率告警
+    - alert: NovaProxyHighErrorRate
+      expr: rate(nova_proxy_errors_total[5m]) / rate(nova_proxy_requests_total[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy high error rate"
+        description: "Nova Proxy error rate is {{ $value | humanizePercentage }}"
+    
+    # 响应时间过长告警
+    - alert: NovaProxyHighLatency
+      expr: histogram_quantile(0.95, rate(nova_proxy_request_duration_seconds_bucket[5m])) > 1
+      for: 5m
+      labels:
+        severity: warning
+        service: nova-proxy
+      annotations:
+        summary: "Nova Proxy high latency"
+        description: "Nova Proxy 95th percentile latency is {{ $value }}s"
+
+---
+# PodMonitor - Pod级别监控配置
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: nova-proxy-pods
+  labels:
+    app: nova-proxy
+    component: pod-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: nova-proxy
+      component: server
+  podMetricsEndpoints:
+  - port: metrics
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s

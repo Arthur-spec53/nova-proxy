@@ -1,0 +1,376 @@
+# 日志存储 PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nova-proxy-logs-pv
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: logs
+spec:
+  capacity:
+    storage: 50Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nova-proxy-logs
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - rsize=1048576
+    - wsize=1048576
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: nfs-server.example.com
+    path: /exports/nova-proxy/logs
+
+---
+# 缓存存储 PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nova-proxy-cache-pv
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: cache
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: nova-proxy-cache
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - rsize=1048576
+    - wsize=1048576
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: nfs-server.example.com
+    path: /exports/nova-proxy/cache
+
+---
+# 配置存储 PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nova-proxy-config-pv
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: config
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nova-proxy-config
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - rsize=1048576
+    - wsize=1048576
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: nfs-server.example.com
+    path: /exports/nova-proxy/config
+
+---
+# 备份存储 PV
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nova-proxy-backup-pv
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: backup
+spec:
+  capacity:
+    storage: 500Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: nova-proxy-backup
+  mountOptions:
+    - hard
+    - nfsvers=4.1
+    - rsize=1048576
+    - wsize=1048576
+    - timeo=600
+    - retrans=2
+  nfs:
+    server: nfs-server.example.com
+    path: /exports/nova-proxy/backup
+
+---
+# 日志存储 PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nova-proxy-logs-pvc
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: logs
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: nova-proxy-logs
+  selector:
+    matchLabels:
+      type: logs
+
+---
+# 缓存存储 PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nova-proxy-cache-pvc
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: cache
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: nova-proxy-cache
+  selector:
+    matchLabels:
+      type: cache
+
+---
+# 配置存储 PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nova-proxy-config-pvc
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: config
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/nfs
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: nova-proxy-config
+  selector:
+    matchLabels:
+      type: config
+
+---
+# 备份存储 PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nova-proxy-backup-pvc
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+    type: backup
+  annotations:
+    volume.beta.kubernetes.io/storage-provisioner: kubernetes.io/nfs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: nova-proxy-backup
+  selector:
+    matchLabels:
+      type: backup
+
+---
+# StorageClass 定义
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-logs
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: kubernetes.io/nfs
+parameters:
+  server: nfs-server.example.com
+  path: /exports/nova-proxy/logs
+  readOnly: "false"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  - hard
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - timeo=600
+  - retrans=2
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-cache
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: kubernetes.io/nfs
+parameters:
+  server: nfs-server.example.com
+  path: /exports/nova-proxy/cache
+  readOnly: "false"
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  - hard
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - timeo=600
+  - retrans=2
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-config
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: kubernetes.io/nfs
+parameters:
+  server: nfs-server.example.com
+  path: /exports/nova-proxy/config
+  readOnly: "false"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  - hard
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - timeo=600
+  - retrans=2
+
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-backup
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: kubernetes.io/nfs
+parameters:
+  server: nfs-server.example.com
+  path: /exports/nova-proxy/backup
+  readOnly: "false"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: Immediate
+mountOptions:
+  - hard
+  - nfsvers=4.1
+  - rsize=1048576
+  - wsize=1048576
+  - timeo=600
+  - retrans=2
+
+---
+# 高性能 SSD StorageClass（用于缓存）
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-ssd
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: kubernetes.io/aws-ebs
+parameters:
+  type: gp3
+  iops: "3000"
+  throughput: "125"
+  encrypted: "true
+  fsType: ext4
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# 网络存储 StorageClass（用于共享数据）
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nova-proxy-efs
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: nova-proxy
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-xxxxxxxxx
+  directoryPerms: "0755"
+  gidRangeStart: "1000"
+  gidRangeEnd: "2000"
+  basePath: "/nova-proxy"
+reclaimPolicy: Retain
+allowVolumeExpansion: false
+volumeBindingMode: Immediate
+mountOptions:
+  - tls
+  - regional
+  - iam

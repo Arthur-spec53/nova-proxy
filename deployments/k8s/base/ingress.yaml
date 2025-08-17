@@ -1,0 +1,316 @@
+# 主 Ingress - HTTP/HTTPS 流量路由
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: ingress
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    # Nginx Ingress Controller 配置
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    
+    # 证书管理
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/acme-challenge-type: "http01"
+    
+    # 速率限制
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/rate-limit-connections: "10"
+    
+    # 请求大小限制
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/client-max-body-size: "10m"
+    
+    # 超时配置
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    
+    # 缓冲配置
+    nginx.ingress.kubernetes.io/proxy-buffering: "on"
+    nginx.ingress.kubernetes.io/proxy-buffer-size: "4k"
+    nginx.ingress.kubernetes.io/proxy-buffers-number: "8"
+    
+    # 安全头
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none';";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+    
+    # 访问日志
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
+    nginx.ingress.kubernetes.io/access-log-path: "/var/log/nginx/nova-proxy-access.log"
+    
+    # CORS 配置
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://nova-proxy.example.com,https://admin.nova-proxy.example.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    nginx.ingress.kubernetes.io/cors-expose-headers: "Content-Length,Content-Range"
+    nginx.ingress.kubernetes.io/cors-max-age: "1728000"
+    nginx.ingress.kubernetes.io/cors-allow-credentials: "true"
+spec:
+  tls:
+    - hosts:
+        - nova-proxy.example.com
+        - api.nova-proxy.example.com
+        - admin.nova-proxy.example.com
+      secretName: nova-proxy-tls-cert
+  rules:
+    # 主域名 - Web UI 和 API
+    - host: nova-proxy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy
+                port:
+                  number: 80
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 8080
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-health
+                port:
+                  number: 8081
+    
+    # API 子域名 - 专用 API 访问
+    - host: api.nova-proxy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 8080
+          - path: /v1
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 8080
+          - path: /v2
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 8080
+    
+    # 管理子域名 - 管理界面
+    - host: admin.nova-proxy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-admin
+                port:
+                  number: 8082
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-metrics
+                port:
+                  number: 9090
+
+---
+# gRPC Ingress - gRPC 流量路由
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy-grpc
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: grpc-ingress
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+    nginx.ingress.kubernetes.io/grpc-backend: "true"
+    
+    # 证书管理
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # gRPC 特定配置
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/client-body-timeout: "3600"
+    nginx.ingress.kubernetes.io/client-header-timeout: "3600"
+    
+    # HTTP/2 支持
+    nginx.ingress.kubernetes.io/http2-push-preload: "true"
+spec:
+  tls:
+    - hosts:
+        - grpc.nova-proxy.example.com
+      secretName: nova-proxy-grpc-tls-cert
+  rules:
+    - host: grpc.nova-proxy.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 9000
+
+---
+# 监控 Ingress - Prometheus 指标访问
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy-monitoring
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: monitoring-ingress
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    
+    # 证书管理
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    
+    # 基础认证
+    nginx.ingress.kubernetes.io/auth-type: "basic"
+    nginx.ingress.kubernetes.io/auth-secret: "nova-proxy-monitoring-auth"
+    nginx.ingress.kubernetes.io/auth-realm: "Nova Proxy Monitoring"
+    
+    # IP 白名单
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    
+    # 禁用缓存
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Cache-Control: no-cache, no-store, must-revalidate";
+      more_set_headers "Pragma: no-cache";
+      more_set_headers "Expires: 0";
+spec:
+  tls:
+    - hosts:
+        - monitoring.nova-proxy.example.com
+      secretName: nova-proxy-monitoring-tls-cert
+  rules:
+    - host: monitoring.nova-proxy.example.com
+      http:
+        paths:
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-metrics
+                port:
+                  number: 9090
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-health
+                port:
+                  number: 8081
+
+---
+# 开发环境 Ingress - 用于开发和测试
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy-dev
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: dev-ingress
+    app.kubernetes.io/part-of: nova-proxy
+    environment: development
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    
+    # 开发环境配置
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    
+    # 调试配置
+    nginx.ingress.kubernetes.io/enable-access-log: "true"
+    nginx.ingress.kubernetes.io/access-log-path: "/var/log/nginx/nova-proxy-dev-access.log"
+    
+    # 开发环境安全头（较宽松）
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+spec:
+  rules:
+    - host: dev.nova-proxy.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy
+                port:
+                  number: 80
+          - path: /api/(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: nova-proxy-internal
+                port:
+                  number: 8080
+          - path: /admin/(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: nova-proxy-admin
+                port:
+                  number: 8082
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-metrics
+                port:
+                  number: 9090
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: nova-proxy-health
+                port:
+                  number: 8081

@@ -1,0 +1,455 @@
+# Nova Proxy Grafana 监控仪表板配置
+# Grafana 部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+    component: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.0.0
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: nova-proxy-secrets
+              key: grafana-admin-password
+        - name: GF_INSTALL_PLUGINS
+          value: "grafana-piechart-panel,grafana-worldmap-panel,grafana-clock-panel"
+        - name: GF_SERVER_ROOT_URL
+          value: "http://grafana.nova-proxy.local"
+        - name: GF_ANALYTICS_REPORTING_ENABLED
+          value: "false"
+        - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+          value: "false"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+        - name: grafana-config
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: grafana-dashboards-config
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: grafana-dashboards
+          mountPath: /var/lib/grafana/dashboards
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 30
+          timeoutSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 3000
+          initialDelaySeconds: 5
+          timeoutSeconds: 10
+      volumes:
+      - name: grafana-storage
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: grafana-config
+        configMap:
+          name: grafana-datasources
+      - name: grafana-dashboards-config
+        configMap:
+          name: grafana-dashboards-config
+      - name: grafana-dashboards
+        configMap:
+          name: grafana-dashboards
+
+---
+# Grafana Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app: grafana
+spec:
+  ports:
+  - port: 3000
+    targetPort: 3000
+    name: web
+  selector:
+    app: grafana
+
+---
+# Grafana 数据源配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  labels:
+    app: grafana
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      access: proxy
+      url: http://prometheus:9090
+      isDefault: true
+      editable: true
+      jsonData:
+        timeInterval: "15s"
+        queryTimeout: "60s"
+        httpMethod: "POST"
+    - name: Jaeger
+      type: jaeger
+      access: proxy
+      url: http://jaeger-query:16686
+      editable: true
+      jsonData:
+        tracesToLogs:
+          datasourceUid: 'loki'
+          tags: ['job', 'instance', 'pod', 'namespace']
+          mappedTags: [{ key: 'service.name', value: 'service' }]
+          mapTagNamesEnabled: false
+          spanStartTimeShift: '1h'
+          spanEndTimeShift: '1h'
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki:3100
+      editable: true
+      jsonData:
+        maxLines: 1000
+
+---
+# Grafana 仪表板配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards-config
+  labels:
+    app: grafana
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: 'nova-proxy'
+      orgId: 1
+      folder: 'Nova Proxy'
+      type: file
+      disableDeletion: false
+      updateIntervalSeconds: 10
+      allowUiUpdates: true
+      options:
+        path: /var/lib/grafana/dashboards
+
+---
+# Nova Proxy 主仪表板
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  labels:
+    app: grafana
+data:
+  nova-proxy-overview.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Nova Proxy Overview",
+        "tags": ["nova-proxy", "overview"],
+        "style": "dark",
+        "timezone": "browser",
+        "refresh": "30s",
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "panels": [
+          {
+            "id": 1,
+            "title": "Request Rate",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(rate(nova_proxy_requests_total[5m]))",
+                "legendFormat": "Requests/sec"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "reqps",
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 100},
+                    {"color": "red", "value": 1000}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Error Rate",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(rate(nova_proxy_errors_total[5m])) / sum(rate(nova_proxy_requests_total[5m])) * 100",
+                "legendFormat": "Error %"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percent",
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 1},
+                    {"color": "red", "value": 5}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "Active Connections",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(nova_proxy_active_connections)",
+                "legendFormat": "Connections"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short",
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 5000},
+                    {"color": "red", "value": 8000}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0}
+          },
+          {
+            "id": 4,
+            "title": "Response Time (95th percentile)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(nova_proxy_request_duration_seconds_bucket[5m])) by (le))",
+                "legendFormat": "95th percentile"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 0.5},
+                    {"color": "red", "value": 1}
+                  ]
+                }
+              }
+            },
+            "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0}
+          },
+          {
+            "id": 5,
+            "title": "Request Rate Over Time",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(rate(nova_proxy_requests_total[5m])) by (instance)",
+                "legendFormat": "{{instance}}"
+              }
+            ],
+            "yAxes": [
+              {
+                "label": "Requests/sec",
+                "min": 0
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "id": 6,
+            "title": "Response Time Distribution",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.50, sum(rate(nova_proxy_request_duration_seconds_bucket[5m])) by (le))",
+                "legendFormat": "50th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.95, sum(rate(nova_proxy_request_duration_seconds_bucket[5m])) by (le))",
+                "legendFormat": "95th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.99, sum(rate(nova_proxy_request_duration_seconds_bucket[5m])) by (le))",
+                "legendFormat": "99th percentile"
+              }
+            ],
+            "yAxes": [
+              {
+                "label": "Response Time (s)",
+                "min": 0
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          },
+          {
+            "id": 7,
+            "title": "QUIC Connection Metrics",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "nova_proxy_quic_connections_established_total",
+                "legendFormat": "Established"
+              },
+              {
+                "expr": "nova_proxy_quic_connections_closed_total",
+                "legendFormat": "Closed"
+              },
+              {
+                "expr": "nova_proxy_quic_handshake_failures_total",
+                "legendFormat": "Handshake Failures"
+              }
+            ],
+            "yAxes": [
+              {
+                "label": "Connections",
+                "min": 0
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+          },
+          {
+            "id": 8,
+            "title": "Resource Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(container_cpu_usage_seconds_total{pod=~\"nova-proxy-.*\"}[5m]) * 100",
+                "legendFormat": "CPU Usage %"
+              },
+              {
+                "expr": "container_memory_usage_bytes{pod=~\"nova-proxy-.*\"} / 1024 / 1024",
+                "legendFormat": "Memory Usage (MB)"
+              }
+            ],
+            "yAxes": [
+              {
+                "label": "Usage",
+                "min": 0
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+          }
+        ]
+      }
+    }
+  
+  nova-proxy-performance.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Nova Proxy Performance",
+        "tags": ["nova-proxy", "performance"],
+        "style": "dark",
+        "timezone": "browser",
+        "refresh": "10s",
+        "time": {
+          "from": "now-30m",
+          "to": "now"
+        },
+        "panels": [
+          {
+            "id": 1,
+            "title": "Throughput (Bytes/sec)",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "sum(rate(nova_proxy_bytes_sent_total[5m]))",
+                "legendFormat": "Bytes Sent/sec"
+              },
+              {
+                "expr": "sum(rate(nova_proxy_bytes_received_total[5m]))",
+                "legendFormat": "Bytes Received/sec"
+              }
+            ],
+            "yAxes": [
+              {
+                "label": "Bytes/sec",
+                "min": 0
+              }
+            ],
+            "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Scheduler Performance",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "nova_proxy_scheduler_decisions_total",
+                "legendFormat": "Scheduling Decisions"
+              },
+              {
+                "expr": "nova_proxy_path_switches_total",
+                "legendFormat": "Path Switches"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "id": 3,
+            "title": "Path Utilization",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "nova_proxy_path_utilization by (path_id)",
+                "legendFormat": "Path {{path_id}}"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ]
+      }
+    }

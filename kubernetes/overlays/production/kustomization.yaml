@@ -1,0 +1,164 @@
+# Nova Proxy 生产环境 Kustomization 配置
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 基础配置
+resources:
+- ../../base/deployment.yaml
+- ../../base/service.yaml
+- ../../base/configmap.yaml
+- ../../base/secret.yaml
+- ../../base/rbac.yaml
+- ../../base/ingress.yaml
+- ../../base/hpa.yaml
+- ../../monitoring/prometheus.yaml
+- ../../monitoring/grafana.yaml
+- ../../security/network-policy.yaml
+- pdb.yaml
+- service-monitor.yaml
+
+# 命名空间
+namespace: nova-proxy-prod
+
+# 通用标签
+commonLabels:
+  environment: production
+  version: v1.0.0
+  team: nova-proxy
+  tier: production
+
+# 通用注解
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/part-of: nova-proxy-system
+  contact.email: ops@nova-proxy.com
+  runbook.url: https://runbooks.nova-proxy.com/nova-proxy
+
+# 名称前缀
+namePrefix: prod-
+
+# 镜像替换
+images:
+- name: nova-proxy
+  newName: registry.nova-proxy.com/nova-proxy
+  newTag: v1.0.0
+- name: prom/prometheus
+  newName: registry.nova-proxy.com/prometheus
+  newTag: v2.45.0
+- name: grafana/grafana
+  newName: registry.nova-proxy.com/grafana
+  newTag: 10.0.0
+
+# 配置补丁
+patchesStrategicMerge:
+- deployment-patch.yaml
+- service-patch.yaml
+- configmap-patch.yaml
+- ingress-patch.yaml
+- hpa-patch.yaml
+
+# JSON 补丁
+patchesJson6902:
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: nova-proxy
+  path: deployment-security-patch.yaml
+- target:
+    group: networking.k8s.io
+    version: v1
+    kind: NetworkPolicy
+    name: nova-proxy-production
+  path: network-policy-patch.yaml
+
+# 副本数配置
+replicas:
+- name: nova-proxy
+  count: 5  # 生产环境高可用
+- name: prometheus
+  count: 2  # Prometheus 高可用
+- name: grafana
+  count: 2  # Grafana 高可用
+
+# 配置生成器
+configMapGenerator:
+- name: nova-proxy-prod-config
+  literals:
+  - log-level=info
+  - metrics-enabled=true
+  - debug-mode=false
+  - hot-reload=false
+  - performance-mode=true
+  - security-hardened=true
+  files:
+  - prod-config.yaml
+  - security-config.yaml
+  - performance-config.yaml
+
+# 密钥生成器（生产环境使用外部密钥管理）
+secretGenerator:
+- name: nova-proxy-prod-secrets
+  literals:
+  - environment=production
+  files:
+  - tls.crt=certs/prod-tls.crt
+  - tls.key=certs/prod-tls.key
+  - ca.crt=certs/prod-ca.crt
+  type: kubernetes.io/tls
+
+# 变量替换
+vars:
+- name: ENVIRONMENT
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.environment
+- name: REPLICA_COUNT
+  objref:
+    kind: Deployment
+    name: nova-proxy
+    apiVersion: apps/v1
+  fieldref:
+    fieldpath: spec.replicas
+- name: IMAGE_TAG
+  objref:
+    kind: Deployment
+    name: nova-proxy
+    apiVersion: apps/v1
+  fieldref:
+    fieldpath: spec.template.spec.containers[0].image
+
+# 资源转换器
+transformers:
+- ../../transformers/add-prod-labels.yaml
+- ../../transformers/security-hardening.yaml
+- ../../transformers/resource-optimization.yaml
+
+# 生成器选项
+generatorOptions:
+  disableNameSuffixHash: true  # 生产环境使用固定名称
+  labels:
+    environment: production
+    security.level: high
+    monitoring.enabled: "true"
+  annotations:
+    config.kubernetes.io/local-config: "false"
+    security.kubernetes.io/hardened: "true"
+
+# 构建元数据
+buildMetadata:
+- buildDate
+- gitCommit
+- gitTreeState
+- gitVersion
+
+# 组件配置
+components:
+- ../../components/monitoring
+- ../../components/security
+- ../../components/backup
+- ../../components/alerting

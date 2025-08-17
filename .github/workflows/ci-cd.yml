@@ -1,0 +1,508 @@
+# Nova Proxy CI/CD 流水线
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, 'release/*' ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # 每天凌晨 2 点运行安全扫描
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - staging
+        - production
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: registry.nova-proxy.com
+  IMAGE_NAME: nova-proxy
+  GO_VERSION: '1.21'
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # 代码质量检查
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      run: |
+        go mod download
+        go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        go install github.com/securecodewarrior/sast-scan@latest
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+    
+    - name: Run go fmt
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "Code is not formatted properly:"
+          gofmt -s -l .
+          exit 1
+        fi
+    
+    - name: Run go vet
+      run: go vet ./...
+    
+    - name: Run staticcheck
+      run: staticcheck ./...
+    
+    - name: Run golangci-lint
+      run: golangci-lint run --timeout=10m
+    
+    - name: Run gosec security scanner
+      uses: securecodewarrior/github-action-gosec@master
+      with:
+        args: '-fmt sarif -out gosec-results.sarif ./...'
+    
+    - name: Upload SARIF file
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: gosec-results.sarif
+
+  # 单元测试
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    if: github.event.inputs.skip_tests != 'true'
+    
+    strategy:
+      matrix:
+        go-version: ['1.20', '1.21']
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+        cache: true
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Run tests with race detection
+      run: |
+        go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        go tool cover -html=coverage.out -o coverage.html
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.out
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: true
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.os }}-${{ matrix.go-version }}
+        path: |
+          coverage.out
+          coverage.html
+
+  # 集成测试
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    if: github.event.inputs.skip_tests != 'true'
+    needs: [unit-tests]
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      jaeger:
+        image: jaegertracing/all-in-one:latest
+        ports:
+          - 14268:14268
+          - 16686:16686
+        env:
+          COLLECTOR_OTLP_ENABLED: true
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Generate test certificates
+      run: |
+        mkdir -p test/certs
+        openssl req -x509 -newkey rsa:4096 -keyout test/certs/key.pem -out test/certs/cert.pem -days 365 -nodes -subj "/CN=localhost"
+    
+    - name: Run integration tests
+      env:
+        REDIS_URL: redis://localhost:6379
+        JAEGER_ENDPOINT: http://localhost:14268/api/traces
+        TEST_CERT_FILE: test/certs/cert.pem
+        TEST_KEY_FILE: test/certs/key.pem
+      run: |
+        go test -tags=integration -v ./test/integration/...
+    
+    - name: Upload integration test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-results
+        path: test/results/
+
+  # 性能测试
+  performance-tests:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [integration-tests]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache: true
+    
+    - name: Install dependencies
+      run: |
+        go mod download
+        go install github.com/rakyll/hey@latest
+    
+    - name: Build application
+      run: go build -o nova-proxy ./cmd/nova-proxy
+    
+    - name: Generate test certificates
+      run: |
+        mkdir -p test/certs
+        openssl req -x509 -newkey rsa:4096 -keyout test/certs/key.pem -out test/certs/cert.pem -days 365 -nodes -subj "/CN=localhost"
+    
+    - name: Start application
+      run: |
+        ./nova-proxy --config test/configs/perf-test.yaml &
+        sleep 10
+    
+    - name: Run performance tests
+      run: |
+        # HTTP/2 性能测试
+        hey -n 10000 -c 100 -m GET https://localhost:8080/health
+        
+        # QUIC 性能测试
+        go test -tags=performance -bench=. -benchmem ./test/performance/...
+    
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: performance-test-results
+        path: test/performance/results/
+
+  # 安全扫描
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+    
+    - name: Run Nancy vulnerability scanner
+      run: |
+        go list -json -m all | docker run --rm -i sonatypecommunity/nancy:latest sleuth
+
+  # 构建 Docker 镜像
+  build-image:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [code-quality, unit-tests]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+    
+    - name: Build and push Docker image
+      id: build
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile
+        target: runtime
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          VERSION=${{ steps.meta.outputs.version }}
+          COMMIT=${{ github.sha }}
+          BUILD_DATE=${{ steps.meta.outputs.created }}
+    
+    - name: Sign container image
+      run: |
+        echo "${{ secrets.COSIGN_PRIVATE_KEY }}" > cosign.key
+        cosign sign --key cosign.key ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        rm cosign.key
+      env:
+        COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+    
+    - name: Generate SBOM
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+        format: spdx-json
+        output-file: sbom.spdx.json
+    
+    - name: Upload SBOM
+      uses: actions/upload-artifact@v3
+      with:
+        name: sbom
+        path: sbom.spdx.json
+
+  # 部署到 Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-image, integration-tests]
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.nova-proxy.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl config current-context
+    
+    - name: Deploy with Helm
+      run: |
+        export KUBECONFIG=kubeconfig
+        helm upgrade --install nova-proxy-staging ./helm/nova-proxy \
+          --namespace nova-proxy-staging \
+          --create-namespace \
+          --values ./helm/nova-proxy/values-staging.yaml \
+          --set image.tag=${{ needs.build-image.outputs.image-tag }} \
+          --set deployment.annotations."deployment\.kubernetes\.io/revision"="${{ github.run_number }}" \
+          --wait --timeout=10m
+    
+    - name: Run smoke tests
+      run: |
+        export KUBECONFIG=kubeconfig
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=nova-proxy -n nova-proxy-staging --timeout=300s
+        kubectl run smoke-test --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f https://staging.nova-proxy.com/health
+
+  # 部署到 Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-image, deploy-staging]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://nova-proxy.com
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+    
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+    
+    - name: Configure kubectl
+      run: |
+        echo "${{ secrets.KUBECONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+        export KUBECONFIG=kubeconfig
+        kubectl config current-context
+    
+    - name: Deploy with Helm (Blue-Green)
+      run: |
+        export KUBECONFIG=kubeconfig
+        
+        # 部署新版本（Green）
+        helm upgrade --install nova-proxy-green ./helm/nova-proxy \
+          --namespace nova-proxy-production \
+          --create-namespace \
+          --values ./helm/nova-proxy/values-production.yaml \
+          --set image.tag=${{ needs.build-image.outputs.image-tag }} \
+          --set service.selector.version=green \
+          --set deployment.annotations."deployment\.kubernetes\.io/revision"="${{ github.run_number }}" \
+          --wait --timeout=15m
+        
+        # 健康检查
+        kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=nova-proxy,version=green -n nova-proxy-production --timeout=300s
+        
+        # 切换流量到 Green
+        kubectl patch service nova-proxy -n nova-proxy-production -p '{"spec":{"selector":{"version":"green"}}}'
+        
+        # 等待流量切换完成
+        sleep 30
+        
+        # 删除旧版本（Blue）
+        helm uninstall nova-proxy-blue -n nova-proxy-production || true
+        
+        # 重命名 Green 为主版本
+        helm upgrade nova-proxy ./helm/nova-proxy \
+          --namespace nova-proxy-production \
+          --values ./helm/nova-proxy/values-production.yaml \
+          --set image.tag=${{ needs.build-image.outputs.image-tag }} \
+          --reuse-values
+    
+    - name: Run production smoke tests
+      run: |
+        export KUBECONFIG=kubeconfig
+        kubectl run production-smoke-test --rm -i --restart=Never --image=curlimages/curl -- \
+          curl -f https://nova-proxy.com/health
+    
+    - name: Notify deployment success
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        text: 'Nova Proxy ${{ needs.build-image.outputs.image-tag }} deployed to production successfully!'
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # 清理
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: always()
+    
+    steps:
+    - name: Clean up old images
+      run: |
+        # 清理超过 30 天的镜像
+        echo "Cleaning up old container images..."
+        # 这里可以添加清理逻辑
+    
+    - name: Clean up artifacts
+      uses: geekyeggo/delete-artifact@v2
+      with:
+        name: |
+          test-results-*
+          integration-test-results
+          performance-test-results
+        failOnError: false

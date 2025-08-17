@@ -1,0 +1,632 @@
+# Nova Proxy Helm Chart 默认配置
+
+# 全局配置
+global:
+  # 镜像仓库配置
+  imageRegistry: registry.nova-proxy.com
+  imagePullSecrets:
+  - name: nova-proxy-registry
+  
+  # 存储类配置
+  storageClass: ""
+  
+  # 安全配置
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+  
+  # 网络配置
+  networkPolicy:
+    enabled: true
+  
+  # 服务网格配置
+  serviceMesh:
+    enabled: false
+    type: istio  # istio, linkerd, consul
+
+# 应用配置
+image:
+  registry: registry.nova-proxy.com
+  repository: nova-proxy
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets:
+  - name: nova-proxy-registry
+
+# 部署配置
+deployment:
+  # 副本数配置
+  replicaCount: 3
+  
+  # 更新策略
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  
+  # 注解
+  annotations: {}
+  
+  # Pod 注解
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+  
+  # Pod 标签
+  podLabels: {}
+  
+  # 节点选择器
+  nodeSelector: {}
+  
+  # 容忍度
+  tolerations: []
+  
+  # 亲和性
+  affinity:
+    podAntiAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+            - key: app.kubernetes.io/name
+              operator: In
+              values:
+              - nova-proxy
+          topologyKey: kubernetes.io/hostname
+  
+  # 优先级类
+  priorityClassName: ""
+  
+  # 终止宽限期
+  terminationGracePeriodSeconds: 30
+  
+  # DNS 配置
+  dnsPolicy: ClusterFirst
+  dnsConfig: {}
+  
+  # 主机网络
+  hostNetwork: false
+  
+  # 主机 PID
+  hostPID: false
+
+# 容器配置
+container:
+  # 端口配置
+  ports:
+    quic: 8443
+    https: 8080
+    health: 8081
+    metrics: 9090
+    pprof: 6060
+  
+  # 环境变量
+  env:
+    NOVA_ENV: production
+    NOVA_LOG_LEVEL: info
+    NOVA_DEBUG: "false"
+    NOVA_HOT_RELOAD: "false"
+    NOVA_PPROF_ENABLED: "false"
+    NOVA_PERFORMANCE_MODE: "true"
+    NOVA_SECURITY_HARDENED: "true"
+  
+  # 额外环境变量
+  extraEnv: []
+  
+  # 环境变量来源
+  envFrom: []
+  
+  # 资源配置
+  resources:
+    requests:
+      memory: "256Mi"
+      cpu: "200m"
+      ephemeral-storage: "1Gi"
+    limits:
+      memory: "1Gi"
+      cpu: "1000m"
+      ephemeral-storage: "2Gi"
+  
+  # 安全上下文
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    capabilities:
+      drop:
+      - ALL
+    seccompProfile:
+      type: RuntimeDefault
+  
+  # 生命周期钩子
+  lifecycle: {}
+  
+  # 启动命令
+  command: []
+  args: []
+
+# 健康检查配置
+healthCheck:
+  # 存活探针
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: health
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  # 就绪探针
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /ready
+      port: health
+      scheme: HTTP
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+    successThreshold: 1
+  
+  # 启动探针
+  startupProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: health
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 30
+    successThreshold: 1
+
+# 服务配置
+service:
+  # 服务类型
+  type: ClusterIP
+  
+  # 集群 IP
+  clusterIP: ""
+  
+  # 外部 IP
+  externalIPs: []
+  
+  # 负载均衡器 IP
+  loadBalancerIP: ""
+  
+  # 负载均衡器源范围
+  loadBalancerSourceRanges: []
+  
+  # 外部流量策略
+  externalTrafficPolicy: Cluster
+  
+  # 会话亲和性
+  sessionAffinity: None
+  
+  # 端口配置
+  ports:
+    quic:
+      port: 8443
+      targetPort: quic
+      protocol: UDP
+      nodePort: null
+    https:
+      port: 8080
+      targetPort: https
+      protocol: TCP
+      nodePort: null
+    health:
+      port: 8081
+      targetPort: health
+      protocol: TCP
+      nodePort: null
+  
+  # 注解
+  annotations: {}
+  
+  # 标签
+  labels: {}
+
+# Ingress 配置
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+  - host: nova-proxy.example.com
+    paths:
+    - path: /
+      pathType: Prefix
+      service:
+        name: nova-proxy
+        port:
+          number: 8080
+  tls:
+  - secretName: nova-proxy-tls
+    hosts:
+    - nova-proxy.example.com
+
+# 配置映射
+configMap:
+  enabled: true
+  data:
+    config.yaml: |
+      # Nova Proxy 配置文件
+      log:
+        level: info
+        format: json
+        output: stdout
+        rotation:
+          enabled: true
+          max_size: 100
+          max_age: 7
+          max_backups: 10
+      
+      server:
+        quic:
+          addr: ":8443"
+          cert_file: "/app/certs/tls.crt"
+          key_file: "/app/certs/tls.key"
+        https:
+          addr: ":8080"
+          cert_file: "/app/certs/tls.crt"
+          key_file: "/app/certs/tls.key"
+        health:
+          addr: ":8081"
+        metrics:
+          addr: ":9090"
+          path: "/metrics"
+      
+      quic:
+        max_idle_timeout: "300s"
+        max_receive_stream_flow_control_window: 6291456
+        max_receive_connection_flow_control_window: 15728640
+        max_incoming_streams: 1000
+        max_incoming_uni_streams: 1000
+        keep_alive_period: "30s"
+      
+      performance:
+        max_connections: 10000
+        connection_timeout: "30s"
+        idle_timeout: "300s"
+        read_timeout: "30s"
+        write_timeout: "30s"
+        max_header_size: 8192
+        max_body_size: 104857600
+      
+      monitoring:
+        enabled: true
+        metrics_enabled: true
+        tracing_enabled: true
+        health_check_enabled: true
+        pprof_enabled: false
+      
+      security:
+        tls_min_version: "1.3"
+        cipher_suites: []
+        hsts_enabled: true
+        hsts_max_age: 31536000
+        content_security_policy: "default-src 'self'"
+        x_frame_options: "DENY"
+        x_content_type_options: "nosniff"
+
+# 密钥配置
+secret:
+  enabled: true
+  type: kubernetes.io/tls
+  data:
+    # TLS 证书（Base64 编码）
+    tls.crt: ""
+    tls.key: ""
+    # CA 证书
+    ca.crt: ""
+    # JWT 签名密钥
+    jwt.key: ""
+    # API 密钥
+    api.key: ""
+
+# RBAC 配置
+rbac:
+  enabled: true
+  
+  # 服务账户
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+    labels: {}
+    automountServiceAccountToken: true
+  
+  # 集群角色
+  clusterRole:
+    create: true
+    rules:
+    - apiGroups: [""]
+      resources: ["nodes", "services", "pods", "configmaps", "secrets"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["deployments", "replicasets"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["networking.k8s.io"]
+      resources: ["networkpolicies", "ingresses"]
+      verbs: ["get", "list", "watch"]
+  
+  # 角色
+  role:
+    create: true
+    rules:
+    - apiGroups: [""]
+      resources: ["configmaps", "secrets"]
+      verbs: ["get", "list", "watch", "create", "update", "patch"]
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["get", "list", "watch", "update", "patch"]
+
+# 自动扩缩容配置
+autoscaling:
+  enabled: true
+  
+  # HPA 配置
+  hpa:
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+    
+    # 自定义指标
+    customMetrics:
+    - type: Pods
+      pods:
+        metric:
+          name: quic_active_connections
+        target:
+          type: AverageValue
+          averageValue: "1000"
+    
+    # 扩缩容策略
+    behavior:
+      scaleDown:
+        stabilizationWindowSeconds: 300
+        policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+      scaleUp:
+        stabilizationWindowSeconds: 60
+        policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+  
+  # VPA 配置
+  vpa:
+    enabled: false
+    updateMode: "Off"  # Off, Initial, Recreation, Auto
+    resourcePolicy:
+      containerPolicies:
+      - containerName: nova-proxy
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 2000m
+          memory: 2Gi
+
+# Pod 中断预算
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+  # maxUnavailable: 1
+
+# 网络策略
+networkPolicy:
+  enabled: true
+  
+  # 入站规则
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: UDP
+      port: 8443
+    - protocol: TCP
+      port: 9090
+  
+  # 出站规则
+  egress:
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+# 监控配置
+monitoring:
+  # Prometheus 配置
+  prometheus:
+    enabled: true
+    
+    # ServiceMonitor
+    serviceMonitor:
+      enabled: true
+      namespace: monitoring
+      interval: 30s
+      scrapeTimeout: 10s
+      labels: {}
+      annotations: {}
+    
+    # PrometheusRule
+    prometheusRule:
+      enabled: true
+      namespace: monitoring
+      labels: {}
+      annotations: {}
+      rules:
+      - alert: NovaProxyHighErrorRate
+        expr: rate(nova_proxy_requests_total{status=~"5.."}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nova Proxy high error rate"
+          description: "Nova Proxy error rate is above 10% for 5 minutes"
+  
+  # Grafana 配置
+  grafana:
+    enabled: true
+    
+    # 仪表板
+    dashboards:
+      enabled: true
+      labels:
+        grafana_dashboard: "1"
+      annotations: {}
+
+# 链路追踪配置
+tracing:
+  # Jaeger 配置
+  jaeger:
+    enabled: true
+    agent:
+      host: jaeger-agent
+      port: 6831
+    collector:
+      endpoint: http://jaeger-collector:14268/api/traces
+    sampler:
+      type: probabilistic
+      param: 0.1
+
+# 缓存配置
+redis:
+  enabled: true
+  host: redis-master
+  port: 6379
+  password: ""
+  database: 0
+  
+  # 连接池配置
+  pool:
+    max_idle: 10
+    max_active: 100
+    idle_timeout: "300s"
+    wait: true
+
+# 安全配置
+security:
+  # Pod 安全策略
+  podSecurityPolicy:
+    enabled: false
+  
+  # Pod 安全标准
+  podSecurityStandards:
+    enforce: restricted
+    audit: restricted
+    warn: restricted
+  
+  # 证书管理器
+  certManager:
+    enabled: true
+    issuer:
+      name: letsencrypt-prod
+      email: admin@nova-proxy.com
+      server: https://acme-v02.api.letsencrypt.org/directory
+  
+  # 网络策略
+  networkPolicy:
+    enabled: true
+    denyAll: false
+
+# 存储配置
+storage:
+  # 持久卷声明
+  persistentVolumeClaim:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+    labels: {}
+  
+  # 临时存储
+  emptyDir:
+    enabled: true
+    sizeLimit: 1Gi
+    medium: ""  # Memory for tmpfs
+
+# 测试配置
+tests:
+  enabled: true
+  image:
+    registry: registry.nova-proxy.com
+    repository: nova-proxy-test
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  
+  # 测试超时
+  timeout: 300
+  
+  # 测试资源
+  resources:
+    requests:
+      memory: "64Mi"
+      cpu: "50m"
+    limits:
+      memory: "128Mi"
+      cpu: "100m"
+
+# 额外配置
+extra:
+  # 额外标签
+  labels: {}
+  
+  # 额外注解
+  annotations: {}
+  
+  # 额外环境变量
+  env: []
+  
+  # 额外卷
+  volumes: []
+  
+  # 额外卷挂载
+  volumeMounts: []
+  
+  # 额外容器
+  containers: []
+  
+  # 额外初始化容器
+  initContainers: []

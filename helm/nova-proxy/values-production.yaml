@@ -1,0 +1,731 @@
+# Nova Proxy Production 环境配置
+# 继承默认 values.yaml 并覆盖特定配置
+
+# 全局配置
+global:
+  environment: production
+  imageRegistry: registry.nova-proxy.com
+  storageClass: premium-ssd
+  networkPolicy:
+    enabled: true
+  serviceMesh:
+    enabled: true
+    istio:
+      enabled: true
+      mtls: strict
+
+# 镜像配置
+image:
+  repository: registry.nova-proxy.com/nova-proxy
+  tag: "v1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: registry-secret
+
+# 部署配置
+replicaCount: 5
+
+deployment:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 2
+  
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    config.linkerd.io/proxy-cpu-request: "200m"
+    config.linkerd.io/proxy-memory-request: "256Mi"
+    config.linkerd.io/proxy-cpu-limit: "500m"
+    config.linkerd.io/proxy-memory-limit: "512Mi"
+  
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+    linkerd.io/inject: enabled
+    sidecar.istio.io/inject: "true"
+  
+  nodeSelector:
+    node-type: compute
+    environment: production
+    instance-type: c5.2xlarge
+  
+  tolerations:
+    - key: "production"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+    - key: "high-performance"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+  
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - nova-proxy
+        topologyKey: kubernetes.io/hostname
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: node.kubernetes.io/instance-type
+            operator: In
+            values:
+            - c5.2xlarge
+            - c5.4xlarge
+            - c5.9xlarge
+  
+  priorityClassName: high-priority
+  terminationGracePeriodSeconds: 60
+
+# 容器配置
+container:
+  ports:
+    quic: 8443
+    https: 8080
+    health: 8081
+    metrics: 9090
+    pprof: 6060
+  
+  env:
+    NOVA_ENV: production
+    NOVA_LOG_LEVEL: info
+    NOVA_DEBUG: "false"
+    NOVA_HOT_RELOAD: "false"
+    NOVA_PPROF_ENABLED: "false"
+    NOVA_PERFORMANCE_MODE: "true"
+    NOVA_SECURITY_HARDENED: "true"
+    NOVA_MAX_CONNECTIONS: "50000"
+    NOVA_WORKER_THREADS: "8"
+    GOMAXPROCS: "8"
+    GOMEMLIMIT: "6GiB"
+  
+  resources:
+    requests:
+      memory: "2Gi"
+      cpu: "1000m"
+      ephemeral-storage: "5Gi"
+    limits:
+      memory: "8Gi"
+      cpu: "4000m"
+      ephemeral-storage: "20Gi"
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    capabilities:
+      drop:
+      - ALL
+    seccompProfile:
+      type: RuntimeDefault
+
+# 健康检查配置
+healthcheck:
+  livenessProbe:
+    enabled: true
+    httpGet:
+      path: /health
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 60
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 3
+    successThreshold: 1
+  
+  readinessProbe:
+    enabled: true
+    httpGet:
+      path: /ready
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+    successThreshold: 1
+  
+  startupProbe:
+    enabled: true
+    httpGet:
+      path: /startup
+      port: 8081
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 60
+    successThreshold: 1
+
+# 服务配置
+service:
+  type: LoadBalancer
+  ports:
+    quic:
+      port: 443
+      targetPort: 8443
+      protocol: UDP
+    https:
+      port: 443
+      targetPort: 8080
+      protocol: TCP
+    health:
+      port: 8081
+      targetPort: 8081
+      protocol: TCP
+    metrics:
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+  
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+    service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "60"
+    service.beta.kubernetes.io/aws-load-balancer-ssl-cert: arn:aws:acm:us-west-2:123456789012:certificate/12345678-1234-1234-1234-123456789012
+    service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "443"
+    external-dns.alpha.kubernetes.io/hostname: nova-proxy.com
+
+# Ingress 配置
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+    nginx.ingress.kubernetes.io/rate-limit: "5000"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "https://admin.nova-proxy.com,https://dashboard.nova-proxy.com"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+      more_set_headers "Content-Security-Policy: default-src 'self'";
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  
+  hosts:
+    - host: nova-proxy.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service:
+            name: nova-proxy
+            port:
+              number: 8080
+    - host: api.nova-proxy.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service:
+            name: nova-proxy
+            port:
+              number: 8080
+  
+  tls:
+    - secretName: nova-proxy-production-tls
+      hosts:
+        - nova-proxy.com
+        - api.nova-proxy.com
+
+# 自动扩缩容配置
+autoscaling:
+  enabled: true
+  minReplicas: 5
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 70
+  
+  # 自定义指标
+  targetRequestsPerSecond: 1000
+  targetActiveConnections: 5000
+  targetResponseTime: "100ms"
+  
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 600
+      policies:
+      - type: Percent
+        value: 25
+        periodSeconds: 120
+      - type: Pods
+        value: 2
+        periodSeconds: 120
+      selectPolicy: Min
+    scaleUp:
+      stabilizationWindowSeconds: 120
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 5
+        periodSeconds: 60
+      selectPolicy: Max
+
+# 垂直自动扩缩容
+verticalAutoscaling:
+  enabled: true
+  updateMode: "Auto"
+  minAllowed:
+    cpu: 500m
+    memory: 1Gi
+  maxAllowed:
+    cpu: 8
+    memory: 16Gi
+  controlledResources:
+    - cpu
+    - memory
+  controlledValues: RequestsAndLimits
+
+# 持久化存储
+persistence:
+  enabled: true
+  storageClass: premium-ssd
+  accessModes:
+    - ReadWriteOnce
+  size: 100Gi
+  
+  logs:
+    enabled: true
+    size: 50Gi
+    storageClass: standard
+    accessModes:
+      - ReadWriteOnce
+  
+  cache:
+    enabled: true
+    size: 20Gi
+    storageClass: premium-ssd
+    accessModes:
+      - ReadWriteOnce
+  
+  temp:
+    enabled: true
+    size: 10Gi
+    storageClass: premium-ssd
+    accessModes:
+      - ReadWriteOnce
+  
+  backup:
+    enabled: true
+    size: 200Gi
+    storageClass: standard
+    accessModes:
+      - ReadWriteOnce
+
+# 配置管理
+configMap:
+  data:
+    nova-proxy.yaml: |
+      server:
+        listen_addr: "0.0.0.0:8080"
+        quic_addr: "0.0.0.0:8443"
+        tls:
+          cert_file: "/etc/tls/tls.crt"
+          key_file: "/etc/tls/tls.key"
+          min_version: "1.2"
+          max_version: "1.3"
+          cipher_suites:
+            - "TLS_AES_256_GCM_SHA384"
+            - "TLS_CHACHA20_POLY1305_SHA256"
+            - "TLS_AES_128_GCM_SHA256"
+        quic:
+          max_streams: 10000
+          max_connections: 50000
+          idle_timeout: "300s"
+          keep_alive: "30s"
+          max_stream_receive_window: 16777216
+          max_connection_receive_window: 67108864
+      
+      proxy:
+        upstreams:
+          - name: "production-backend"
+            addresses:
+              - "prod-backend-1.internal:8080"
+              - "prod-backend-2.internal:8080"
+              - "prod-backend-3.internal:8080"
+              - "prod-backend-4.internal:8080"
+            load_balancer: "least_connections"
+            health_check:
+              enabled: true
+              path: "/health"
+              interval: "5s"
+              timeout: "3s"
+              healthy_threshold: 2
+              unhealthy_threshold: 2
+        
+        timeout:
+          connect: "5s"
+          read: "60s"
+          write: "60s"
+          idle: "300s"
+        
+        retry:
+          max_attempts: 3
+          backoff: "exponential"
+          initial_interval: "500ms"
+          max_interval: "5s"
+        
+        circuit_breaker:
+          enabled: true
+          failure_threshold: 10
+          recovery_timeout: "30s"
+          half_open_max_requests: 5
+      
+      logging:
+        level: "info"
+        format: "json"
+        output: "stdout"
+        rotation:
+          enabled: true
+          max_size: "500MB"
+          max_age: "30d"
+          max_backups: 30
+          compress: true
+        sanitization:
+          enabled: true
+          fields:
+            - "password"
+            - "token"
+            - "authorization"
+            - "cookie"
+            - "x-api-key"
+      
+      monitoring:
+        prometheus:
+          enabled: true
+          path: "/metrics"
+          port: 9090
+        
+        tracing:
+          enabled: true
+          jaeger:
+            endpoint: "http://jaeger-collector.monitoring:14268/api/traces"
+            service_name: "nova-proxy-production"
+            sampler_type: "probabilistic"
+            sampler_param: 0.01
+        
+        health:
+          enabled: true
+          path: "/health"
+          port: 8081
+      
+      security:
+        rate_limiting:
+          enabled: true
+          requests_per_second: 5000
+          burst: 10000
+          cleanup_interval: "30s"
+        
+        cors:
+          enabled: true
+          allowed_origins:
+            - "https://admin.nova-proxy.com"
+            - "https://dashboard.nova-proxy.com"
+          allowed_methods:
+            - "GET"
+            - "POST"
+            - "PUT"
+            - "DELETE"
+            - "OPTIONS"
+          allowed_headers:
+            - "Content-Type"
+            - "Authorization"
+            - "X-Requested-With"
+            - "X-API-Key"
+          max_age: "86400"
+        
+        headers:
+          enabled: true
+          x_frame_options: "DENY"
+          x_content_type_options: "nosniff"
+          x_xss_protection: "1; mode=block"
+          referrer_policy: "strict-origin-when-cross-origin"
+          content_security_policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      
+      performance:
+        connection_pool:
+          max_idle_conns: 1000
+          max_idle_conns_per_host: 100
+          idle_conn_timeout: "300s"
+          max_conns_per_host: 200
+        
+        cache:
+          enabled: true
+          ttl: "10m"
+          max_size: "1GB"
+          cleanup_interval: "5m"
+        
+        compression:
+          enabled: true
+          level: 6
+          min_length: 1024
+
+# Secret 配置
+secret:
+  data:
+    database_url: "cG9zdGdyZXNxbDovL25vdmFfcHJveHk6cHJvZC1wYXNzd29yZEBwcm9kLWRiLmRhdGFiYXNlOjU0MzIvbm92YV9wcm94eQ=="  # postgresql://nova_proxy:prod-password@prod-db.database:5432/nova_proxy
+    redis_url: "cmVkaXM6Ly86cHJvZC1yZWRpcy1wYXNzd29yZEBwcm9kLXJlZGlzLmNhY2hlOjYzNzk="  # redis://:prod-redis-password@prod-redis.cache:6379
+    jwt_secret: "cHJvZHVjdGlvbi1qd3Qtc2VjcmV0LWtleS12ZXJ5LXNlY3VyZQ=="  # production-jwt-secret-key-very-secure
+    api_key: "cHJvZC1hcGkta2V5LXN1cGVyLXNlY3VyZS0xMjM0NTY3ODkw"  # prod-api-key-super-secure-1234567890
+    encryption_key: "cHJvZC1lbmNyeXB0aW9uLWtleS0zMi1ieXRlcy1sb25n"  # prod-encryption-key-32-bytes-long
+
+# TLS 配置
+tls:
+  enabled: true
+  autoGenerate: false
+  secretName: nova-proxy-production-tls
+  certManager:
+    enabled: true
+    issuer: letsencrypt-prod
+    dnsNames:
+      - nova-proxy.com
+      - api.nova-proxy.com
+      - "*.nova-proxy.com"
+
+# 监控配置
+monitoring:
+  enabled: true
+  prometheus:
+    enabled: true
+    port: 9090
+    path: /metrics
+    scrapeInterval: 15s
+    scrapeTimeout: 10s
+  
+  serviceMonitor:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+    interval: 15s
+    scrapeTimeout: 10s
+    metricRelabelings:
+      - sourceLabels: [__name__]
+        regex: 'go_.*'
+        action: drop
+  
+  prometheusRule:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+    rules:
+      - alert: NovaProxyHighErrorRate
+        expr: rate(nova_proxy_requests_total{status=~"5.."}[5m]) / rate(nova_proxy_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Nova Proxy high error rate"
+          description: "Nova Proxy error rate is {{ $value | humanizePercentage }}"
+      
+      - alert: NovaProxyHighLatency
+        expr: histogram_quantile(0.95, rate(nova_proxy_request_duration_seconds_bucket[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Nova Proxy high latency"
+          description: "Nova Proxy 95th percentile latency is {{ $value }}s"
+
+# 追踪配置
+tracing:
+  enabled: true
+  jaeger:
+    endpoint: http://jaeger-collector.monitoring:14268/api/traces
+    serviceName: nova-proxy-production
+    samplerType: probabilistic
+    samplerParam: 0.01
+  
+  opentelemetry:
+    enabled: true
+    endpoint: http://otel-collector.monitoring:4317
+    serviceName: nova-proxy-production
+    serviceVersion: v1.0.0
+
+# 调试配置
+debugging:
+  pprof:
+    enabled: false
+    port: 6060
+  
+  hotReload:
+    enabled: false
+
+# 数据库配置
+database:
+  enabled: true
+  host: prod-postgres.database
+  port: 5432
+  name: nova_proxy
+  user: nova_proxy
+  sslMode: require
+  maxOpenConns: 100
+  maxIdleConns: 20
+  connMaxLifetime: 3600s
+  connMaxIdleTime: 1800s
+  
+  networkPolicy:
+    podSelector:
+      matchLabels:
+        app: postgresql
+    namespaceSelector:
+      matchLabels:
+        name: database
+
+# Redis 配置
+redis:
+  enabled: true
+  host: prod-redis.cache
+  port: 6379
+  database: 0
+  maxRetries: 5
+  poolSize: 50
+  minIdleConns: 10
+  dialTimeout: 10s
+  readTimeout: 5s
+  writeTimeout: 5s
+  poolTimeout: 10s
+  idleTimeout: 600s
+  
+  networkPolicy:
+    podSelector:
+      matchLabels:
+        app: redis
+    namespaceSelector:
+      matchLabels:
+        name: cache
+
+# 安全配置
+security:
+  networkPolicy:
+    enabled: true
+    ingress:
+      allowFromIngressController: true
+      allowFromSameNamespace: true
+      allowFromMonitoring: true
+      allowFromLoadBalancer: true
+      allowHealthCheck: true
+      ingressControllerNamespace: ingress-nginx
+      monitoringNamespace: monitoring
+      loadBalancerCIDRs:
+        - "10.0.0.0/8"
+        - "172.16.0.0/12"
+        - "192.168.0.0/16"
+    egress:
+      allowDNS: true
+      allowUpstreams: true
+      allowDatabase: true
+      allowRedis: true
+      allowHTTPS: true
+      allowHTTP: false
+      allowKubernetesAPI: true
+      allowNTP: true
+    
+    denyAll:
+      enabled: false
+    
+    monitoring:
+      enabled: true
+      prometheusNamespace: monitoring
+      grafanaNamespace: monitoring
+      tracingNamespace: monitoring
+  
+  podSecurityPolicy:
+    enabled: true
+  
+  rbac:
+    enabled: true
+    serviceAccount:
+      create: true
+      name: nova-proxy-production
+      annotations:
+        eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/nova-proxy-production
+        iam.gke.io/gcp-service-account: nova-proxy-production@project-id.iam.gserviceaccount.com
+
+# 代理配置
+proxy:
+  upstreams:
+    - name: production-backend
+      addresses:
+        - prod-backend-1.internal:8080
+        - prod-backend-2.internal:8080
+        - prod-backend-3.internal:8080
+        - prod-backend-4.internal:8080
+      loadBalancer: least_connections
+      healthCheck:
+        enabled: true
+        path: /health
+        interval: 5s
+        timeout: 3s
+        healthyThreshold: 2
+        unhealthyThreshold: 2
+  
+  timeout:
+    connect: 5s
+    read: 60s
+    write: 60s
+    idle: 300s
+  
+  retry:
+    maxAttempts: 3
+    backoff: exponential
+    initialInterval: 500ms
+    maxInterval: 5s
+  
+  circuitBreaker:
+    enabled: true
+    failureThreshold: 10
+    recoveryTimeout: 30s
+    halfOpenMaxRequests: 5
+
+# 备份配置
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention: 30
+  storage:
+    type: s3
+    bucket: nova-proxy-backups
+    region: us-west-2
+    prefix: production/
+
+# 额外配置
+extra:
+  labels:
+    environment: production
+    team: platform
+    cost-center: engineering
+    compliance: pci-dss
+    data-classification: confidential
+  
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+    meta.helm.sh/release-name: nova-proxy-production
+    meta.helm.sh/release-namespace: nova-proxy-production
+    backup.velero.io/backup-volumes: data,logs
+    backup.velero.io/ttl: "720h"
+
+# Pod 中断预算
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 3
+  # maxUnavailable: 1

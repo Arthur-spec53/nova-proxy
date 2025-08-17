@@ -1,0 +1,48 @@
+{
+  "enabled": true,
+  "enhanced_proxy": {
+    "connection_pool": {
+      "max_connections": 100,
+      "max_idle_time": "5m",
+      "cleanup_interval": "1m",
+      "connection_timeout": "30s",
+      "enabled": true
+    },
+    "retry": {
+      "max_retries": 3,
+      "initial_delay": "100ms",
+      "max_delay": "5s",
+      "backoff_factor": 2.0,
+      "jitter": true
+    },
+    "circuit_breaker": {
+      "failure_threshold": 5,
+      "recovery_timeout": "30s",
+      "success_threshold": 3
+    },
+    "health_check": {
+      "interval": "30s",
+      "timeout": "5s",
+      "enabled": true
+    },
+    "graceful_shutdown": {
+      "timeout": "30s",
+      "enabled": true
+    }
+  },
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "error_tracking": true,
+    "performance_log": true,
+    "connection_log": true
+  },
+  "metrics": {
+    "enabled": true,
+    "collect_interval": "30s",
+    "retention_period": "24h",
+    "export_format": "prometheus"
+  },
+  "version": "1.0.0",
+  "last_updated": "2024-01-01T00:00:00Z"
+}

@@ -1,0 +1,387 @@
+# Nova Proxy Kubernetes 网络策略配置
+# 默认拒绝所有入站流量
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-default-deny
+  labels:
+    app: nova-proxy
+    component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+
+---
+# Nova Proxy 入站流量策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-ingress
+  labels:
+    app: nova-proxy
+    component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+      component: server
+  policyTypes:
+  - Ingress
+  ingress:
+  # 允许来自 Ingress Controller 的流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8443
+    - protocol: TCP
+      port: 8081
+  
+  # 允许来自 LoadBalancer 的外部流量
+  - from: []
+    ports:
+    - protocol: UDP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # 允许来自 Prometheus 的监控流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  # 允许来自同一命名空间的健康检查
+  - from:
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8081
+  
+  # 允许来自 Kubernetes API Server 的流量（健康检查）
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 8081
+
+---
+# Nova Proxy 出站流量策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-egress
+  labels:
+    app: nova-proxy
+    component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+      component: server
+  policyTypes:
+  - Egress
+  egress:
+  # 允许访问 Kubernetes API Server
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443
+  
+  # 允许访问 DNS 服务
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    - podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # 允许访问 Redis（如果需要）
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  
+  # 允许访问 Jaeger（链路追踪）
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    - podSelector:
+        matchLabels:
+          app: jaeger
+    ports:
+    - protocol: TCP
+      port: 14268
+    - protocol: UDP
+      port: 6831
+    - protocol: UDP
+      port: 6832
+  
+  # 允许访问外部服务（HTTPS）
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # 允许访问外部服务（HTTP，仅用于健康检查等）
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+  
+  # 允许访问 NTP 服务
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 123
+
+---
+# 监控系统网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-monitoring
+  labels:
+    app: nova-proxy
+    component: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app: prometheus
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # 允许来自 Grafana 的访问
+  - from:
+    - podSelector:
+        matchLabels:
+          app: grafana
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  # 允许来自 AlertManager 的访问
+  - from:
+    - podSelector:
+        matchLabels:
+          app: alertmanager
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  egress:
+  # 允许访问 Nova Proxy 指标
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nova-proxy
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  # 允许访问 Kubernetes API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# Ingress Controller 网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-ingress-controller
+  labels:
+    app: nova-proxy
+    component: ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: ingress-nginx
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # 允许来自外部的流量
+  - from: []
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+  
+  egress:
+  # 允许访问 Nova Proxy 服务
+  - to:
+    - podSelector:
+        matchLabels:
+          app: nova-proxy
+    ports:
+    - protocol: TCP
+      port: 8443
+    - protocol: TCP
+      port: 8081
+  
+  # 允许访问 Kubernetes API
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+
+---
+# 跨命名空间通信策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-cross-namespace
+  labels:
+    app: nova-proxy
+    component: security
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # 允许来自特定命名空间的流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          nova-proxy/allowed: "true"
+    ports:
+    - protocol: TCP
+      port: 8443
+    - protocol: UDP
+      port: 8080
+  
+  egress:
+  # 允许访问特定命名空间的服务
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          nova-proxy/trusted: "true"
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 80
+
+---
+# 开发环境网络策略（更宽松）
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-development
+  labels:
+    app: nova-proxy
+    component: security
+    environment: development
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+      environment: development
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # 开发环境允许所有入站流量
+  - from: []
+  
+  egress:
+  # 开发环境允许所有出站流量
+  - to: []
+
+---
+# 生产环境严格网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-production
+  labels:
+    app: nova-proxy
+    component: security
+    environment: production
+spec:
+  podSelector:
+    matchLabels:
+      app: nova-proxy
+      environment: production
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # 生产环境仅允许必要的入站流量
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8443
+  
+  - from:
+    - podSelector:
+        matchLabels:
+          app: prometheus
+    ports:
+    - protocol: TCP
+      port: 9090
+  
+  egress:
+  # 生产环境仅允许必要的出站流量
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: kube-system
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: UDP
+      port: 53
+  
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS only

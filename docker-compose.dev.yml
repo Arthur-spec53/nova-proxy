@@ -1,0 +1,296 @@
+# Nova Proxy 开发环境配置
+# 使用方法: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+version: '3.8'
+
+services:
+  # ============================================================================
+  # Nova Proxy 服务器 - 开发配置
+  # ============================================================================
+  nova-server:
+    build:
+      target: development
+    volumes:
+      - .:/app/src:cached  # 源代码热重载
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      - NOVA_LOG_LEVEL=debug
+      - NOVA_DEV_MODE=true
+      - NOVA_HOT_RELOAD=true
+      - CGO_ENABLED=1
+      - GOOS=linux
+      - GOARCH=amd64
+    command: [
+      "air", "-c", ".air.toml"
+    ]
+    ports:
+      - "40000:40000"  # Delve debugger port
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - "apparmor:unconfined"
+
+  # ============================================================================
+  # Nova Proxy 客户端 - 开发配置
+  # ============================================================================
+  nova-client:
+    build:
+      target: development
+    volumes:
+      - .:/app/src:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+    environment:
+      - NOVA_LOG_LEVEL=debug
+      - NOVA_DEV_MODE=true
+    restart: "no"
+    stdin_open: true
+    tty: true
+
+  # ============================================================================
+  # 开发工具容器
+  # ============================================================================
+  dev-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: nova-dev-tools
+    volumes:
+      - .:/app/src:cached
+      - go-mod-cache:/go/pkg/mod
+      - go-build-cache:/root/.cache/go-build
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app/src
+    environment:
+      - GOPROXY=https://proxy.golang.org,direct
+      - GOSUMDB=sum.golang.org
+      - CGO_ENABLED=1
+    networks:
+      - nova-network
+    profiles:
+      - dev-tools
+    command: ["sleep", "infinity"]
+
+  # ============================================================================
+  # 测试数据库 - PostgreSQL
+  # ============================================================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: nova-postgres
+    environment:
+      - POSTGRES_DB=nova_test
+      - POSTGRES_USER=nova
+      - POSTGRES_PASSWORD=nova123
+      - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/sql:/docker-entrypoint-initdb.d:ro
+    networks:
+      - nova-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nova -d nova_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - testing
+
+  # ============================================================================
+  # 测试消息队列 - RabbitMQ
+  # ============================================================================
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: nova-rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=nova
+      - RABBITMQ_DEFAULT_PASS=nova123
+      - RABBITMQ_DEFAULT_VHOST=/nova
+    ports:
+      - "5672:5672"
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - nova-network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    profiles:
+      - testing
+
+  # ============================================================================
+  # 性能测试工具 - K6
+  # ============================================================================
+  k6:
+    image: grafana/k6:latest
+    container_name: nova-k6
+    volumes:
+      - ./tests/performance:/scripts:ro
+      - k6-results:/results
+    networks:
+      - nova-network
+    profiles:
+      - performance
+    depends_on:
+      - nova-server
+    command: [
+      "run", 
+      "--out", "json=/results/k6-results.json",
+      "--out", "influxdb=http://influxdb:8086/k6",
+      "/scripts/load-test.js"
+    ]
+
+  # ============================================================================
+  # 性能监控 - InfluxDB
+  # ============================================================================
+  influxdb:
+    image: influxdb:2.7-alpine
+    container_name: nova-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=admin123
+      - DOCKER_INFLUXDB_INIT_ORG=nova
+      - DOCKER_INFLUXDB_INIT_BUCKET=k6
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=nova-token-123
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    networks:
+      - nova-network
+    profiles:
+      - performance
+
+  # ============================================================================
+  # 代码质量检查 - SonarQube
+  # ============================================================================
+  sonarqube:
+    image: sonarqube:10.1-community
+    container_name: nova-sonarqube
+    environment:
+      - SONAR_JDBC_URL=jdbc:postgresql://postgres:5432/sonarqube
+      - SONAR_JDBC_USERNAME=sonar
+      - SONAR_JDBC_PASSWORD=sonar123
+    ports:
+      - "9000:9000"
+    volumes:
+      - sonarqube-data:/opt/sonarqube/data
+      - sonarqube-logs:/opt/sonarqube/logs
+      - sonarqube-extensions:/opt/sonarqube/extensions
+    networks:
+      - nova-network
+    profiles:
+      - quality
+    depends_on:
+      - postgres
+
+  # ============================================================================
+  # 安全扫描 - Trivy
+  # ============================================================================
+  trivy:
+    image: aquasec/trivy:latest
+    container_name: nova-trivy
+    volumes:
+      - .:/app/src:ro
+      - trivy-cache:/root/.cache/trivy
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - nova-network
+    profiles:
+      - security
+    command: [
+      "fs", 
+      "--security-checks", "vuln,config,secret",
+      "--format", "json",
+      "--output", "/app/src/trivy-results.json",
+      "/app/src"
+    ]
+
+  # ============================================================================
+  # 文档生成 - Swagger UI
+  # ============================================================================
+  swagger-ui:
+    image: swaggerapi/swagger-ui:latest
+    container_name: nova-swagger-ui
+    environment:
+      - SWAGGER_JSON=/docs/api.yaml
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./docs:/docs:ro
+    networks:
+      - nova-network
+    profiles:
+      - docs
+
+  # ============================================================================
+  # 邮件测试服务 - MailHog
+  # ============================================================================
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: nova-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - nova-network
+    profiles:
+      - testing
+
+  # ============================================================================
+  # 文件存储模拟 - MinIO
+  # ============================================================================
+  minio:
+    image: minio/minio:latest
+    container_name: nova-minio
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin123
+    ports:
+      - "9001:9000"  # API
+      - "9002:9001"  # Console
+    volumes:
+      - minio-data:/data
+    networks:
+      - nova-network
+    profiles:
+      - storage
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+# ============================================================================
+# 开发环境数据卷
+# ============================================================================
+volumes:
+  go-mod-cache:
+    driver: local
+  go-build-cache:
+    driver: local
+  postgres-data:
+    driver: local
+  rabbitmq-data:
+    driver: local
+  k6-results:
+    driver: local
+  influxdb-data:
+    driver: local
+  sonarqube-data:
+    driver: local
+  sonarqube-logs:
+    driver: local
+  sonarqube-extensions:
+    driver: local
+  trivy-cache:
+    driver: local
+  minio-data:
+    driver: local

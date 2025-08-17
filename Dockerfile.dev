@@ -1,0 +1,120 @@
+# Nova Proxy 开发环境 Dockerfile
+# 支持热重载、调试和开发工具
+
+FROM golang:1.21-alpine AS base
+
+# 安装系统依赖
+RUN apk add --no-cache \
+    git \
+    curl \
+    wget \
+    bash \
+    make \
+    gcc \
+    musl-dev \
+    ca-certificates \
+    tzdata \
+    openssh-client \
+    docker-cli \
+    docker-compose
+
+# 设置工作目录
+WORKDIR /app
+
+# 配置 Go 环境
+ENV GO111MODULE=on \
+    GOPROXY=https://proxy.golang.org,direct \
+    GOSUMDB=sum.golang.org \
+    CGO_ENABLED=1 \
+    GOOS=linux \
+    GOARCH=amd64
+
+# 安装开发工具
+RUN go install github.com/cosmtrek/air@latest && \
+    go install github.com/go-delve/delve/cmd/dlv@latest && \
+    go install golang.org/x/tools/cmd/goimports@latest && \
+    go install golang.org/x/lint/golint@latest && \
+    go install honnef.co/go/tools/cmd/staticcheck@latest && \
+    go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest && \
+    go install github.com/fzipp/gocyclo/cmd/gocyclo@latest && \
+    go install github.com/client9/misspell/cmd/misspell@latest && \
+    go install mvdan.cc/gofumpt@latest && \
+    go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest && \
+    go install github.com/swaggo/swag/cmd/swag@latest && \
+    go install github.com/golang/mock/mockgen@latest && \
+    go install gotest.tools/gotestsum@latest && \
+    go install github.com/onsi/ginkgo/v2/ginkgo@latest && \
+    go install github.com/vektra/mockery/v2@latest
+
+# 安装其他开发工具
+RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin && \
+    curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin && \
+    wget -O- -nv https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
+
+# 复制 go.mod 和 go.sum
+COPY go.mod go.sum ./
+
+# 下载依赖
+RUN go mod download && go mod verify
+
+# 创建必要的目录
+RUN mkdir -p /app/src \
+             /app/bin \
+             /app/logs \
+             /app/tmp \
+             /app/configs \
+             /app/certs \
+             /app/data
+
+# 设置权限
+RUN chmod -R 755 /app
+
+# 开发阶段
+FROM base AS development
+
+# 复制源代码（开发时通过 volume 挂载）
+COPY . /app/src/
+
+# 设置工作目录为源代码目录
+WORKDIR /app/src
+
+# 复制开发脚本
+COPY scripts/dev/ /app/bin/
+RUN chmod +x /app/bin/*.sh
+
+# 暴露端口
+EXPOSE 8080 8443 8081 9090 40000 6060
+
+# 设置健康检查
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8081/health || exit 1
+
+# 默认命令
+CMD ["air", "-c", ".air.toml"]
+
+# 开发工具阶段
+FROM development AS dev-tools
+
+# 安装额外的开发工具
+RUN go install github.com/rakyll/hey@latest && \
+    go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest && \
+    go install github.com/ktr0731/evans@latest && \
+    go install github.com/pressly/goose/v3/cmd/goose@latest && \
+    go install github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+
+# 安装 Node.js 工具（用于前端开发）
+RUN apk add --no-cache nodejs npm && \
+    npm install -g @apidevtools/swagger-parser && \
+    npm install -g redoc-cli
+
+# 安装 Python 工具（用于脚本和自动化）
+RUN apk add --no-cache python3 py3-pip && \
+    pip3 install --no-cache-dir \
+        requests \
+        pyyaml \
+        jinja2 \
+        click \
+        rich
+
+# 设置默认命令为开发工具菜单
+CMD ["bash", "/app/bin/dev-menu.sh"]

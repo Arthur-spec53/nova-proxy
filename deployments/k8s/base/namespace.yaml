@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/component: proxy
+    app.kubernetes.io/part-of: nova-proxy
+    app.kubernetes.io/managed-by: kubectl
+  annotations:
+    description: "Nova Proxy 高性能企业级代理服务器命名空间"
+    contact: "admin@nova-proxy.io"
+    version: "1.0.0"
+---
+# 资源配额
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: nova-proxy-quota
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/component: quota
+spec:
+  hard:
+    # 计算资源
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    
+    # 存储资源
+    requests.storage: 50Gi
+    persistentvolumeclaims: "10"
+    
+    # 对象数量
+    pods: "20"
+    services: "10"
+    secrets: "20"
+    configmaps: "20"
+    replicationcontrollers: "0"
+    
+    # 网络资源
+    services.nodeports: "5"
+    services.loadbalancers: "3"
+---
+# 网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: nova-proxy-network-policy
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # 允许来自同一命名空间的流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: nova-proxy
+  
+  # 允许来自 ingress controller 的流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  
+  # 允许来自监控系统的流量
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090  # metrics
+    - protocol: TCP
+      port: 8081  # health
+  
+  egress:
+  # 允许 DNS 查询
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # 允许访问外部服务
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 80
+    - protocol: TCP
+      port: 443
+  
+  # 允许访问数据库
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: database
+    ports:
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+    - protocol: TCP
+      port: 6379  # Redis

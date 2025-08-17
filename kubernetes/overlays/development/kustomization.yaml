@@ -1,0 +1,110 @@
+# Nova Proxy 开发环境 Kustomization 配置
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# 基础配置
+resources:
+- ../../base/deployment.yaml
+- ../../base/service.yaml
+- ../../base/configmap.yaml
+- ../../base/secret.yaml
+- ../../base/rbac.yaml
+- ../../base/ingress.yaml
+- ../../monitoring/prometheus.yaml
+- ../../monitoring/grafana.yaml
+- ../../security/network-policy.yaml
+
+# 命名空间
+namespace: nova-proxy-dev
+
+# 通用标签
+commonLabels:
+  environment: development
+  version: dev
+  team: nova-proxy
+
+# 通用注解
+commonAnnotations:
+  deployment.kubernetes.io/revision: "1"
+  app.kubernetes.io/managed-by: kustomize
+
+# 名称前缀
+namePrefix: dev-
+
+# 镜像替换
+images:
+- name: nova-proxy
+  newName: nova-proxy
+  newTag: dev-latest
+
+# 配置补丁
+patchesStrategicMerge:
+- deployment-patch.yaml
+- service-patch.yaml
+- configmap-patch.yaml
+- ingress-patch.yaml
+
+# JSON 补丁
+patchesJson6902:
+- target:
+    group: apps
+    version: v1
+    kind: Deployment
+    name: nova-proxy
+  path: deployment-json-patch.yaml
+
+# 副本数配置
+replicas:
+- name: nova-proxy
+  count: 1
+- name: prometheus
+  count: 1
+- name: grafana
+  count: 1
+
+# 配置生成器
+configMapGenerator:
+- name: nova-proxy-dev-config
+  literals:
+  - log-level=debug
+  - metrics-enabled=true
+  - debug-mode=true
+  - hot-reload=true
+  files:
+  - dev-config.yaml
+
+# 密钥生成器
+secretGenerator:
+- name: nova-proxy-dev-secrets
+  literals:
+  - debug-token=ZGV2LWRlYnVnLXRva2VuLTIwMjQ=
+  - dev-api-key=ZGV2LWFwaS1rZXktMjAyNA==
+
+# 变量替换
+vars:
+- name: ENVIRONMENT
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.environment
+- name: LOG_LEVEL
+  objref:
+    kind: ConfigMap
+    name: nova-proxy-config
+    apiVersion: v1
+  fieldref:
+    fieldpath: data.log-level
+
+# 资源转换器
+transformers:
+- ../../transformers/add-dev-labels.yaml
+
+# 生成器选项
+generatorOptions:
+  disableNameSuffixHash: false
+  labels:
+    environment: development
+  annotations:
+    config.kubernetes.io/local-config: "true"

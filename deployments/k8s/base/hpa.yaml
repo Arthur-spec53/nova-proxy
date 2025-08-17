@@ -1,0 +1,372 @@
+# 主 HPA - 基于 CPU 和内存的自动扩缩容
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: nova-proxy-hpa
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: hpa
+    app.kubernetes.io/part-of: nova-proxy
+  annotations:
+    description: "HPA for Nova Proxy based on CPU, memory and custom metrics"
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-proxy
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    # CPU 利用率
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    
+    # 内存利用率
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    
+    # 自定义指标 - 请求速率
+    - type: Pods
+      pods:
+        metric:
+          name: http_requests_per_second
+        target:
+          type: AverageValue
+          averageValue: "100"
+    
+    # 自定义指标 - 响应时间
+    - type: Pods
+      pods:
+        metric:
+          name: http_request_duration_seconds
+        target:
+          type: AverageValue
+          averageValue: "500m"  # 500ms
+    
+    # 自定义指标 - 活跃连接数
+    - type: Pods
+      pods:
+        metric:
+          name: active_connections
+        target:
+          type: AverageValue
+          averageValue: "50"
+    
+    # 外部指标 - 队列长度
+    - type: External
+      external:
+        metric:
+          name: redis_queue_length
+          selector:
+            matchLabels:
+              queue: "nova-proxy-tasks"
+        target:
+          type: AverageValue
+          averageValue: "10"
+  
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Min
+
+---
+# VPA - 垂直 Pod 自动扩缩容（推荐模式）
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: nova-proxy-vpa
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: vpa
+    app.kubernetes.io/part-of: nova-proxy
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: nova-proxy
+  updatePolicy:
+    updateMode: "Off"  # 仅推荐，不自动更新
+  resourcePolicy:
+    containerPolicies:
+      - containerName: nova-proxy
+        minAllowed:
+          cpu: 100m
+          memory: 128Mi
+        maxAllowed:
+          cpu: 4000m
+          memory: 8Gi
+        controlledResources: ["cpu", "memory"]
+        controlledValues: RequestsAndLimits
+      - containerName: nginx
+        minAllowed:
+          cpu: 50m
+          memory: 64Mi
+        maxAllowed:
+          cpu: 1000m
+          memory: 1Gi
+        controlledResources: ["cpu", "memory"]
+        controlledValues: RequestsAndLimits
+
+---
+# PodDisruptionBudget - Pod 中断预算
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: nova-proxy-pdb
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: pdb
+    app.kubernetes.io/part-of: nova-proxy
+spec:
+  minAvailable: 2  # 至少保持 2 个 Pod 运行
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/instance: nova-proxy
+      app.kubernetes.io/component: proxy
+
+---
+# ServiceMonitor - Prometheus 监控配置
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: nova-proxy-metrics
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: monitoring
+    app.kubernetes.io/part-of: nova-proxy
+    prometheus: kube-prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nova-proxy
+      app.kubernetes.io/component: metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: 'go_.*'
+          action: drop
+        - sourceLabels: [__name__]
+          regex: 'promhttp_.*'
+          action: drop
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_name]
+          targetLabel: pod
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+  namespaceSelector:
+    matchNames:
+      - nova-proxy
+
+---
+# PrometheusRule - 告警规则
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: nova-proxy-alerts
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: alerts
+    app.kubernetes.io/part-of: nova-proxy
+    prometheus: kube-prometheus
+spec:
+  groups:
+    - name: nova-proxy.rules
+      interval: 30s
+      rules:
+        # 高可用性告警
+        - alert: NovaProxyDown
+          expr: up{job="nova-proxy-metrics"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nova Proxy instance is down"
+            description: "Nova Proxy instance {{ $labels.instance }} has been down for more than 1 minute."
+        
+        - alert: NovaProxyHighErrorRate
+          expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy high error rate"
+            description: "Nova Proxy error rate is {{ $value | humanizePercentage }} for more than 2 minutes."
+        
+        # 性能告警
+        - alert: NovaProxyHighLatency
+          expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+          for: 3m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy high latency"
+            description: "Nova Proxy 95th percentile latency is {{ $value }}s for more than 3 minutes."
+        
+        - alert: NovaProxyHighCPU
+          expr: rate(process_cpu_seconds_total[5m]) * 100 > 80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy high CPU usage"
+            description: "Nova Proxy CPU usage is {{ $value }}% for more than 5 minutes."
+        
+        - alert: NovaProxyHighMemory
+          expr: process_resident_memory_bytes / 1024 / 1024 > 1024
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy high memory usage"
+            description: "Nova Proxy memory usage is {{ $value }}MB for more than 5 minutes."
+        
+        # 连接告警
+        - alert: NovaProxyHighConnections
+          expr: active_connections > 1000
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy high connection count"
+            description: "Nova Proxy has {{ $value }} active connections for more than 2 minutes."
+        
+        - alert: NovaProxyConnectionPoolExhausted
+          expr: connection_pool_active / connection_pool_max > 0.9
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nova Proxy connection pool nearly exhausted"
+            description: "Nova Proxy connection pool is {{ $value | humanizePercentage }} full."
+        
+        # 缓存告警
+        - alert: NovaProxyCacheHitRateLow
+          expr: cache_hit_rate < 0.8
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy cache hit rate is low"
+            description: "Nova Proxy cache hit rate is {{ $value | humanizePercentage }} for more than 5 minutes."
+        
+        # 队列告警
+        - alert: NovaProxyQueueBacklog
+          expr: queue_length > 100
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy queue backlog"
+            description: "Nova Proxy has {{ $value }} items in queue for more than 2 minutes."
+        
+        # 证书告警
+        - alert: NovaProxyCertificateExpiringSoon
+          expr: (tls_certificate_expiry_timestamp - time()) / 86400 < 30
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nova Proxy TLS certificate expiring soon"
+            description: "Nova Proxy TLS certificate will expire in {{ $value }} days."
+        
+        - alert: NovaProxyCertificateExpired
+          expr: tls_certificate_expiry_timestamp < time()
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nova Proxy TLS certificate expired"
+            description: "Nova Proxy TLS certificate has expired."
+
+---
+# 自定义指标适配器配置（如果使用 custom-metrics-api）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: adapter-config
+  namespace: nova-proxy
+  labels:
+    app.kubernetes.io/name: nova-proxy
+    app.kubernetes.io/instance: nova-proxy
+    app.kubernetes.io/component: metrics-adapter
+    app.kubernetes.io/part-of: nova-proxy
+data:
+  config.yaml: |
+    rules:
+      - seriesQuery: 'http_requests_per_second{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^(.*)_per_second$"
+          as: "${1}_per_second"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+      
+      - seriesQuery: 'http_request_duration_seconds{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          matches: "^(.*)_duration_seconds$"
+          as: "${1}_duration_seconds"
+        metricsQuery: 'histogram_quantile(0.95, sum(rate(<<.Series>>_bucket{<<.LabelMatchers>>}[2m])) by (<<.GroupBy>>, le))'
+      
+      - seriesQuery: 'active_connections{namespace!="",pod!=""}'
+        resources:
+          overrides:
+            namespace: {resource: "namespace"}
+            pod: {resource: "pod"}
+        name:
+          as: "active_connections"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'
+    
+    externalRules:
+      - seriesQuery: 'redis_queue_length'
+        name:
+          as: "redis_queue_length"
+        metricsQuery: 'sum(<<.Series>>{<<.LabelMatchers>>}) by (<<.GroupBy>>)'

@@ -1,0 +1,359 @@
+{{/*
+Nova Proxy ConfigMap 模板
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nova-proxy.configMapName" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.configMap.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  # Nova Proxy 主配置文件
+  nova-proxy.yaml: |
+    # Nova Proxy 配置
+    server:
+      # 监听地址配置
+      listen:
+        quic: "0.0.0.0:{{ .Values.container.ports.quic | default 8443 }}"
+        https: "0.0.0.0:{{ .Values.container.ports.https | default 8080 }}"
+        health: "0.0.0.0:{{ .Values.container.ports.health | default 8081 }}"
+        {{- if .Values.monitoring.enabled }}
+        metrics: "0.0.0.0:{{ .Values.container.ports.metrics | default 9090 }}"
+        {{- end }}
+        {{- if .Values.debugging.pprof.enabled }}
+        pprof: "0.0.0.0:{{ .Values.container.ports.pprof | default 6060 }}"
+        {{- end }}
+      
+      # TLS 配置
+      tls:
+        cert_file: "/etc/nova-proxy/certs/tls.crt"
+        key_file: "/etc/nova-proxy/certs/tls.key"
+        ca_file: "/etc/nova-proxy/certs/ca.crt"
+        {{- if .Values.tls.minVersion }}
+        min_version: {{ .Values.tls.minVersion | quote }}
+        {{- end }}
+        {{- if .Values.tls.maxVersion }}
+        max_version: {{ .Values.tls.maxVersion | quote }}
+        {{- end }}
+        {{- if .Values.tls.cipherSuites }}
+        cipher_suites:
+          {{- range .Values.tls.cipherSuites }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+      
+      # QUIC 配置
+      quic:
+        max_idle_timeout: {{ .Values.quic.maxIdleTimeout | default "30s" | quote }}
+        max_receive_stream_flow_control_window: {{ .Values.quic.maxReceiveStreamFlowControlWindow | default 6291456 }}
+        max_receive_connection_flow_control_window: {{ .Values.quic.maxReceiveConnectionFlowControlWindow | default 15728640 }}
+        max_incoming_streams: {{ .Values.quic.maxIncomingStreams | default 100 }}
+        keep_alive_period: {{ .Values.quic.keepAlivePeriod | default "10s" | quote }}
+        {{- if .Values.quic.multipath.enabled }}
+        multipath:
+          enabled: true
+          scheduler: {{ .Values.quic.multipath.scheduler | default "round_robin" | quote }}
+          max_paths: {{ .Values.quic.multipath.maxPaths | default 4 }}
+        {{- end }}
+      
+      # 代理配置
+      proxy:
+        # 上游服务器配置
+        upstreams:
+          {{- range .Values.proxy.upstreams }}
+          - name: {{ .name | quote }}
+            {{- if .url }}
+            url: {{ .url | quote }}
+            {{- end }}
+            {{- if .addresses }}
+            addresses:
+              {{- range .addresses }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+            weight: {{ .weight | default 1 }}
+            {{- if .health_check }}
+            health_check:
+              enabled: {{ .health_check.enabled | default true }}
+              path: {{ .health_check.path | default "/health" | quote }}
+              interval: {{ .health_check.interval | default "30s" | quote }}
+              timeout: {{ .health_check.timeout | default "5s" | quote }}
+              healthy_threshold: {{ .health_check.healthy_threshold | default 2 }}
+              unhealthy_threshold: {{ .health_check.unhealthy_threshold | default 3 }}
+            {{- end }}
+          {{- end }}
+        
+        # 负载均衡配置
+        load_balancer:
+          algorithm: {{ .Values.proxy.loadBalancer.algorithm | default "round_robin" | quote }}
+          {{- if .Values.proxy.loadBalancer.healthCheck }}
+          health_check:
+            enabled: {{ .Values.proxy.loadBalancer.healthCheck.enabled | default true }}
+            interval: {{ .Values.proxy.loadBalancer.healthCheck.interval | default "30s" | quote }}
+            timeout: {{ .Values.proxy.loadBalancer.healthCheck.timeout | default "5s" | quote }}
+          {{- end }}
+        
+        # 超时配置
+        timeouts:
+          connect: {{ .Values.proxy.timeouts.connect | default "10s" | quote }}
+          read: {{ .Values.proxy.timeouts.read | default "30s" | quote }}
+          write: {{ .Values.proxy.timeouts.write | default "30s" | quote }}
+          idle: {{ .Values.proxy.timeouts.idle | default "60s" | quote }}
+        
+        # 重试配置
+        retry:
+          max_attempts: {{ .Values.proxy.retry.maxAttempts | default 3 }}
+          backoff: {{ .Values.proxy.retry.backoff | default "exponential" | quote }}
+          initial_interval: {{ .Values.proxy.retry.initialInterval | default "1s" | quote }}
+          max_interval: {{ .Values.proxy.retry.maxInterval | default "30s" | quote }}
+    
+    # 日志配置
+    logging:
+      level: {{ .Values.logging.level | default "info" | quote }}
+      format: {{ .Values.logging.format | default "json" | quote }}
+      output: {{ .Values.logging.output | default "stdout" | quote }}
+      {{- if .Values.logging.file }}
+      file:
+        path: {{ .Values.logging.file.path | quote }}
+        max_size: {{ .Values.logging.file.maxSize | default "100MB" | quote }}
+        max_age: {{ .Values.logging.file.maxAge | default "7d" | quote }}
+        max_backups: {{ .Values.logging.file.maxBackups | default 10 }}
+        compress: {{ .Values.logging.file.compress | default true }}
+      {{- end }}
+      {{- if .Values.logging.fields }}
+      fields:
+        {{- range $key, $value := .Values.logging.fields }}
+        {{ $key }}: {{ $value | quote }}
+        {{- end }}
+      {{- end }}
+    
+    # 监控配置
+    {{- if .Values.monitoring.enabled }}
+    monitoring:
+      enabled: true
+      {{- if .Values.monitoring.prometheus }}
+      prometheus:
+        enabled: {{ .Values.monitoring.prometheus.enabled | default true }}
+        path: {{ .Values.monitoring.prometheus.path | default "/metrics" | quote }}
+        {{- if .Values.monitoring.prometheus.labels }}
+        labels:
+          {{- range $key, $value := .Values.monitoring.prometheus.labels }}
+          {{ $key }}: {{ $value | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      {{- if .Values.monitoring.tracing }}
+      tracing:
+        enabled: {{ .Values.monitoring.tracing.enabled | default false }}
+        {{- if .Values.monitoring.tracing.jaeger }}
+        jaeger:
+          endpoint: {{ .Values.monitoring.tracing.jaeger.endpoint | quote }}
+          service_name: {{ .Values.monitoring.tracing.jaeger.serviceName | default "nova-proxy" | quote }}
+          sample_rate: {{ .Values.monitoring.tracing.jaeger.sampleRate | default 0.1 }}
+        {{- end }}
+      {{- end }}
+    {{- end }}
+    
+    # 安全配置
+    security:
+      {{- if .Values.security.rateLimit }}
+      rate_limit:
+        enabled: {{ .Values.security.rateLimit.enabled | default true }}
+        requests_per_second: {{ .Values.security.rateLimit.requestsPerSecond | default 1000 }}
+        burst: {{ .Values.security.rateLimit.burst | default 2000 }}
+        {{- if .Values.security.rateLimit.whitelist }}
+        whitelist:
+          {{- range .Values.security.rateLimit.whitelist }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
+      
+      {{- if .Values.security.cors }}
+      cors:
+        enabled: {{ .Values.security.cors.enabled | default false }}
+        {{- if .Values.security.cors.allowedOrigins }}
+        allowed_origins:
+          {{- range .Values.security.cors.allowedOrigins }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.security.cors.allowedMethods }}
+        allowed_methods:
+          {{- range .Values.security.cors.allowedMethods }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.security.cors.allowedHeaders }}
+        allowed_headers:
+          {{- range .Values.security.cors.allowedHeaders }}
+          - {{ . | quote }}
+          {{- end }}
+        {{- end }}
+        allow_credentials: {{ .Values.security.cors.allowCredentials | default false }}
+        max_age: {{ .Values.security.cors.maxAge | default "86400s" | quote }}
+      {{- end }}
+    
+    # 性能配置
+    performance:
+      # 连接池配置
+      connection_pool:
+        max_idle_conns: {{ .Values.performance.connectionPool.maxIdleConns | default 100 }}
+        max_idle_conns_per_host: {{ .Values.performance.connectionPool.maxIdleConnsPerHost | default 10 }}
+        idle_conn_timeout: {{ .Values.performance.connectionPool.idleConnTimeout | default "90s" | quote }}
+      
+      # 缓存配置
+      {{- if .Values.performance.cache }}
+      cache:
+        enabled: {{ .Values.performance.cache.enabled | default false }}
+        {{- if .Values.performance.cache.redis }}
+        redis:
+          address: {{ .Values.performance.cache.redis.address | quote }}
+          password: {{ .Values.performance.cache.redis.password | quote }}
+          db: {{ .Values.performance.cache.redis.db | default 0 }}
+          pool_size: {{ .Values.performance.cache.redis.poolSize | default 10 }}
+        {{- end }}
+        ttl: {{ .Values.performance.cache.ttl | default "300s" | quote }}
+      {{- end }}
+  
+  # 环境变量配置
+  {{- range $key, $value := .Values.container.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- range $key, $value := .Values.extra.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+
+---
+{{/*
+Nova Proxy Nginx ConfigMap 模板
+用于反向代理和负载均衡
+*/}}
+{{- if .Values.nginx.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}-nginx
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    component: nginx
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.nginx.configMap.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+data:
+  nginx.conf: |
+    user nginx;
+    worker_processes {{ .Values.nginx.workerProcesses | default "auto" }};
+    error_log /var/log/nginx/error.log {{ .Values.nginx.errorLogLevel | default "warn" }};
+    pid /var/run/nginx.pid;
+    
+    events {
+        worker_connections {{ .Values.nginx.workerConnections | default 1024 }};
+        use epoll;
+        multi_accept on;
+    }
+    
+    http {
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+        
+        # 日志格式
+        log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                        '$status $body_bytes_sent "$http_referer" '
+                        '"$http_user_agent" "$http_x_forwarded_for" '
+                        'rt=$request_time uct="$upstream_connect_time" '
+                        'uht="$upstream_header_time" urt="$upstream_response_time"';
+        
+        access_log /var/log/nginx/access.log main;
+        
+        # 基础配置
+        sendfile on;
+        tcp_nopush on;
+        tcp_nodelay on;
+        keepalive_timeout {{ .Values.nginx.keepaliveTimeout | default 65 }};
+        types_hash_max_size 2048;
+        client_max_body_size {{ .Values.nginx.clientMaxBodySize | default "1m" }};
+        
+        # Gzip 压缩
+        gzip on;
+        gzip_vary on;
+        gzip_proxied any;
+        gzip_comp_level 6;
+        gzip_types
+            text/plain
+            text/css
+            text/xml
+            text/javascript
+            application/json
+            application/javascript
+            application/xml+rss
+            application/atom+xml
+            image/svg+xml;
+        
+        # 上游服务器配置
+        upstream nova_proxy {
+            {{- range $i := until (int .Values.deployment.replicaCount) }}
+            server {{ include "nova-proxy.fullname" $ }}-{{ $i }}.{{ include "nova-proxy.fullname" $ }}-headless.{{ $.Release.Namespace }}.svc.cluster.local:{{ $.Values.container.ports.https | default 8080 }};
+            {{- end }}
+            keepalive 32;
+        }
+        
+        # 主服务器配置
+        server {
+            listen {{ .Values.nginx.port | default 80 }};
+            server_name {{ .Values.nginx.serverName | default "_" }};
+            
+            # 安全头
+            add_header X-Frame-Options DENY always;
+            add_header X-Content-Type-Options nosniff always;
+            add_header X-XSS-Protection "1; mode=block" always;
+            add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+            
+            # 健康检查
+            location /health {
+                access_log off;
+                return 200 "healthy\n";
+                add_header Content-Type text/plain;
+            }
+            
+            # 代理到 Nova Proxy
+            location / {
+                proxy_pass http://nova_proxy;
+                proxy_http_version 1.1;
+                proxy_set_header Upgrade $http_upgrade;
+                proxy_set_header Connection "upgrade";
+                proxy_set_header Host $host;
+                proxy_set_header X-Real-IP $remote_addr;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                proxy_set_header X-Forwarded-Proto $scheme;
+                
+                proxy_connect_timeout {{ .Values.nginx.proxyTimeout.connect | default "5s" }};
+                proxy_send_timeout {{ .Values.nginx.proxyTimeout.send | default "60s" }};
+                proxy_read_timeout {{ .Values.nginx.proxyTimeout.read | default "60s" }};
+                
+                proxy_buffering on;
+                proxy_buffer_size {{ .Values.nginx.proxyBufferSize | default "4k" }};
+                proxy_buffers {{ .Values.nginx.proxyBuffers | default "8 4k" }};
+            }
+        }
+    }
+{{- end }}

@@ -1,0 +1,100 @@
+# Nova Proxy Helm Chart
+apiVersion: v2
+name: nova-proxy
+description: A high-performance QUIC proxy with multipath support and intelligent scheduling
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+# Chart 维护者信息
+maintainers:
+- name: Nova Proxy Team
+  email: team@nova-proxy.com
+  url: https://nova-proxy.com
+
+# 项目信息
+home: https://nova-proxy.com
+sources:
+- https://github.com/nova-proxy/nova-proxy
+
+# 关键词
+keywords:
+- proxy
+- quic
+- multipath
+- networking
+- performance
+- security
+
+# 图标
+icon: https://nova-proxy.com/assets/logo.svg
+
+# 依赖项
+dependencies:
+- name: prometheus
+  version: "15.x.x"
+  repository: https://prometheus-community.github.io/helm-charts
+  condition: monitoring.prometheus.enabled
+  tags:
+  - monitoring
+- name: grafana
+  version: "6.x.x"
+  repository: https://grafana.github.io/helm-charts
+  condition: monitoring.grafana.enabled
+  tags:
+  - monitoring
+- name: jaeger
+  version: "0.x.x"
+  repository: https://jaegertracing.github.io/helm-charts
+  condition: tracing.jaeger.enabled
+  tags:
+  - tracing
+- name: redis
+  version: "17.x.x"
+  repository: https://charts.bitnami.com/bitnami
+  condition: redis.enabled
+  tags:
+  - cache
+- name: cert-manager
+  version: "1.x.x"
+  repository: https://charts.jetstack.io
+  condition: security.certManager.enabled
+  tags:
+  - security
+
+# 注解
+annotations:
+  # Artifact Hub 注解
+  artifacthub.io/category: networking
+  artifacthub.io/license: MIT
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/containsSecurityUpdates: "true"
+  artifacthub.io/changes: |
+    - Added multipath QUIC support
+    - Improved security hardening
+    - Enhanced monitoring capabilities
+    - Added Kubernetes native deployment
+  artifacthub.io/images: |
+    - name: nova-proxy
+      image: registry.nova-proxy.com/nova-proxy:1.0.0
+    - name: prometheus
+      image: prom/prometheus:v2.45.0
+    - name: grafana
+      image: grafana/grafana:10.0.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://docs.nova-proxy.com
+    - name: Support
+      url: https://support.nova-proxy.com
+  
+  # Helm 注解
+  helm.sh/hook-weight: "0"
+  
+  # 安全注解
+  security.kubernetes.io/policy: restricted
+  
+  # 兼容性注解
+  kubernetes.io/min-version: "1.20.0"
+  
+  # 性能注解
+  performance.kubernetes.io/optimized: "true"

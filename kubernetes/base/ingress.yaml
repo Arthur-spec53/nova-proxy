@@ -1,0 +1,263 @@
+# Nova Proxy Kubernetes Ingress 配置
+# HTTPS Ingress
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy-https
+  labels:
+    app: nova-proxy
+    component: ingress
+  annotations:
+    # Nginx Ingress Controller 配置
+    kubernetes.io/ingress.class: "nginx"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    
+    # 启用 HTTP/2
+    nginx.ingress.kubernetes.io/http2-push-preload: "true"
+    
+    # 安全头
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+      more_set_headers "Content-Security-Policy: default-src 'self'";
+    
+    # 限流配置
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    
+    # 证书管理（cert-manager）
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    cert-manager.io/acme-challenge-type: "http01"
+spec:
+  tls:
+  - hosts:
+    - nova-proxy.example.com
+    - api.nova-proxy.example.com
+    secretName: nova-proxy-tls
+  rules:
+  - host: nova-proxy.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nova-proxy
+            port:
+              number: 8443
+  - host: api.nova-proxy.example.com
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: nova-proxy
+            port:
+              number: 8443
+      - path: /health
+        pathType: Prefix
+        backend:
+          service:
+            name: nova-proxy
+            port:
+              number: 8081
+      - path: /metrics
+        pathType: Prefix
+        backend:
+          service:
+            name: nova-proxy-metrics
+            port:
+              number: 9090
+
+---
+# UDP Ingress（使用 Nginx UDP 负载均衡）
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nova-proxy-udp-ingress
+  labels:
+    app: nova-proxy
+    component: udp-ingress
+data:
+  # Nginx UDP 流配置
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+    
+    stream {
+        upstream nova_proxy_quic {
+            server nova-proxy:8080;
+        }
+        
+        server {
+            listen 443 udp;
+            proxy_pass nova_proxy_quic;
+            proxy_timeout 1s;
+            proxy_responses 1;
+            error_log /var/log/nginx/nova_proxy_quic.log;
+        }
+        
+        # 负载均衡配置
+        upstream nova_proxy_quic_lb {
+            least_conn;
+            server nova-proxy:8080 weight=3 max_fails=3 fail_timeout=30s;
+        }
+        
+        server {
+            listen 8080 udp;
+            proxy_pass nova_proxy_quic_lb;
+            proxy_timeout 1s;
+            proxy_responses 1;
+            proxy_bind $remote_addr transparent;
+        }
+    }
+
+---
+# Traefik Ingress 配置（替代方案）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nova-proxy-traefik
+  labels:
+    app: nova-proxy
+    component: traefik-ingress
+  annotations:
+    # Traefik 配置
+    kubernetes.io/ingress.class: "traefik"
+    traefik.ingress.kubernetes.io/router.entrypoints: "websecure"
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.tls.certresolver: "letsencrypt"
+    
+    # 中间件配置
+    traefik.ingress.kubernetes.io/router.middlewares: "default-security-headers@kubernetescrd,default-rate-limit@kubernetescrd"
+    
+    # 负载均衡策略
+    traefik.ingress.kubernetes.io/service.loadbalancer.method: "wrr"
+    traefik.ingress.kubernetes.io/service.loadbalancer.healthcheck.path: "/health"
+    traefik.ingress.kubernetes.io/service.loadbalancer.healthcheck.interval: "10s"
+spec:
+  tls:
+  - hosts:
+    - nova-proxy-traefik.example.com
+    secretName: nova-proxy-traefik-tls
+  rules:
+  - host: nova-proxy-traefik.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: nova-proxy
+            port:
+              number: 8443
+
+---
+# Traefik UDP 路由配置
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRouteUDP
+metadata:
+  name: nova-proxy-quic
+  labels:
+    app: nova-proxy
+    component: traefik-udp
+spec:
+  entryPoints:
+    - quic
+  routes:
+  - services:
+    - name: nova-proxy
+      port: 8080
+      weight: 10
+
+---
+# Istio Gateway 配置（服务网格方案）
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: nova-proxy-gateway
+  labels:
+    app: nova-proxy
+    component: istio-gateway
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: nova-proxy-istio-tls
+    hosts:
+    - nova-proxy-istio.example.com
+  - port:
+      number: 443
+      name: quic
+      protocol: UDP
+    hosts:
+    - nova-proxy-istio.example.com
+
+---
+# Istio VirtualService 配置
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: nova-proxy-vs
+  labels:
+    app: nova-proxy
+    component: istio-vs
+spec:
+  hosts:
+  - nova-proxy-istio.example.com
+  gateways:
+  - nova-proxy-gateway
+  http:
+  - match:
+    - uri:
+        prefix: "/api"
+    route:
+    - destination:
+        host: nova-proxy
+        port:
+          number: 8443
+    fault:
+      delay:
+        percentage:
+          value: 0.1
+        fixedDelay: 5s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+  - match:
+    - uri:
+        prefix: "/health"
+    route:
+    - destination:
+        host: nova-proxy
+        port:
+          number: 8081
+  - match:
+    - uri:
+        prefix: "/metrics"
+    route:
+    - destination:
+        host: nova-proxy-metrics
+        port:
+          number: 9090
+  - route:
+    - destination:
+        host: nova-proxy
+        port:
+          number: 8443

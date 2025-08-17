@@ -1,0 +1,297 @@
+# Nova Proxy 生产环境部署补丁
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-proxy
+  annotations:
+    # 生产环境部署策略
+    deployment.kubernetes.io/revision: "1"
+    app.kubernetes.io/version: "v1.0.0"
+    security.kubernetes.io/hardened: "true"
+spec:
+  replicas: 5  # 生产环境高可用
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1      # 最多1个不可用
+      maxSurge: 2            # 最多额外2个Pod
+  template:
+    metadata:
+      annotations:
+        # 生产环境特定注解
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+        security.kubernetes.io/hardened: "true"
+        backup.kubernetes.io/enabled: "true"
+    spec:
+      # 生产环境安全上下文
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+        supplementalGroups: [1001]
+      
+      containers:
+      - name: nova-proxy
+        # 生产环境镜像配置
+        image: registry.nova-proxy.com/nova-proxy:v1.0.0
+        imagePullPolicy: IfNotPresent  # 生产环境使用缓存
+        
+        # 生产环境变量
+        env:
+        - name: NOVA_ENV
+          value: "production"
+        - name: NOVA_DEBUG
+          value: "false"
+        - name: NOVA_LOG_LEVEL
+          value: "info"
+        - name: NOVA_HOT_RELOAD
+          value: "false"
+        - name: NOVA_PPROF_ENABLED
+          value: "false"  # 生产环境关闭性能分析
+        - name: NOVA_RACE_DETECTOR
+          value: "false"  # 生产环境关闭竞态检测
+        - name: NOVA_PERFORMANCE_MODE
+          value: "true"
+        - name: NOVA_SECURITY_HARDENED
+          value: "true"
+        - name: NOVA_METRICS_DETAILED
+          value: "true"
+        - name: NOVA_TRACING_SAMPLE_RATE
+          value: "0.1"    # 10% 采样率
+        - name: NOVA_MAX_CONNECTIONS
+          value: "10000"
+        - name: NOVA_CONNECTION_TIMEOUT
+          value: "30s"
+        - name: NOVA_IDLE_TIMEOUT
+          value: "300s"
+        
+        # 生产环境资源配置（严格限制）
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+            ephemeral-storage: "1Gi"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+            ephemeral-storage: "2Gi"
+        
+        # 生产环境健康检查（严格配置）
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+          successThreshold: 1
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+          successThreshold: 1
+        
+        startupProbe:
+          httpGet:
+            path: /health
+            port: health
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+          successThreshold: 1
+        
+        # 生产环境安全上下文（最严格）
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        
+        # 生产环境存储卷挂载
+        volumeMounts:
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        - name: profiles
+          mountPath: /app/profiles
+          readOnly: true
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+        - name: logs
+          mountPath: /app/logs
+        - name: data
+          mountPath: /app/data
+        - name: tmp
+          mountPath: /tmp/nova
+        - name: cache
+          mountPath: /app/cache
+      
+      # 生产环境 Init 容器（预检查）
+      initContainers:
+      - name: config-validator
+        image: registry.nova-proxy.com/config-validator:v1.0.0
+        command: ['/bin/sh']
+        args:
+        - -c
+        - |
+          echo "Validating configuration..."
+          /app/validate-config /app/configs/config.yaml
+          echo "Configuration validation completed"
+        volumeMounts:
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+      
+      - name: cert-validator
+        image: registry.nova-proxy.com/cert-validator:v1.0.0
+        command: ['/bin/sh']
+        args:
+        - -c
+        - |
+          echo "Validating certificates..."
+          openssl x509 -in /app/certs/tls.crt -text -noout
+          echo "Certificate validation completed"
+        volumeMounts:
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 1001
+          capabilities:
+            drop:
+            - ALL
+      
+      # 生产环境存储卷
+      volumes:
+      - name: cache
+        emptyDir:
+          sizeLimit: 500Mi
+          medium: Memory  # 使用内存存储提高性能
+      
+      # 生产环境调度配置
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - nova-proxy
+            topologyKey: kubernetes.io/hostname
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - nova-proxy
+              topologyKey: topology.kubernetes.io/zone
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - production
+              - key: kubernetes.io/arch
+                operator: In
+                values:
+                - amd64
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: instance-type
+                operator: In
+                values:
+                - c5.xlarge
+                - c5.2xlarge
+      
+      # 生产环境容忍度
+      tolerations:
+      - key: "production"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      - key: "high-performance"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      - key: "node.kubernetes.io/unreachable"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 300
+      
+      # 生产环境优先级
+      priorityClassName: high-priority
+      
+      # 生产环境 DNS 配置
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+        searches:
+        - nova-proxy-prod.svc.cluster.local
+        - svc.cluster.local
+        - cluster.local
+      
+      # 生产环境终止配置
+      terminationGracePeriodSeconds: 30
+      
+      # 生产环境服务账户
+      serviceAccountName: nova-proxy
+      automountServiceAccountToken: true
+      
+      # 生产环境镜像拉取密钥
+      imagePullSecrets:
+      - name: nova-proxy-registry
+      
+      # 生产环境主机名配置
+      hostname: nova-proxy
+      subdomain: nova-proxy-headless
+      
+      # 生产环境重启策略
+      restartPolicy: Always

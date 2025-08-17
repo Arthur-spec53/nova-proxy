@@ -1,0 +1,136 @@
+# Nova Proxy 开发环境部署补丁
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nova-proxy
+spec:
+  replicas: 1  # 开发环境单实例
+  template:
+    metadata:
+      annotations:
+        # 开发环境特定注解
+        dev.nova-proxy.io/hot-reload: "true"
+        dev.nova-proxy.io/debug-mode: "true"
+    spec:
+      containers:
+      - name: nova-proxy
+        # 开发环境镜像配置
+        image: nova-proxy:dev-latest
+        imagePullPolicy: Always  # 总是拉取最新镜像
+        
+        # 开发环境端口配置
+        ports:
+        - name: debug
+          containerPort: 2345  # Delve 调试端口
+          protocol: TCP
+        - name: pprof
+          containerPort: 6060  # pprof 性能分析端口
+          protocol: TCP
+        
+        # 开发环境变量
+        env:
+        - name: NOVA_ENV
+          value: "development"
+        - name: NOVA_DEBUG
+          value: "true"
+        - name: NOVA_LOG_LEVEL
+          value: "debug"
+        - name: NOVA_HOT_RELOAD
+          value: "true"
+        - name: NOVA_PPROF_ENABLED
+          value: "true"
+        - name: NOVA_RACE_DETECTOR
+          value: "true"
+        - name: DELVE_ENABLED
+          value: "false"  # 默认关闭，需要时手动开启
+        
+        # 开发环境资源限制（更宽松）
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        
+        # 开发环境存储卷挂载
+        volumeMounts:
+        - name: dev-source
+          mountPath: /app/src
+          readOnly: false  # 允许写入（热重载）
+        - name: dev-logs
+          mountPath: /app/logs
+        - name: dev-cache
+          mountPath: /app/cache
+        
+        # 开发环境健康检查（更宽松）
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: health
+          initialDelaySeconds: 10  # 更短的初始延迟
+          periodSeconds: 30        # 更长的检查间隔
+          timeoutSeconds: 10
+          failureThreshold: 5      # 更多的失败容忍
+        
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 5
+        
+        # 开发环境安全上下文（更宽松）
+        securityContext:
+          allowPrivilegeEscalation: true  # 允许调试
+          readOnlyRootFilesystem: false   # 允许写入
+          runAsNonRoot: false             # 允许 root 用户（调试需要）
+          capabilities:
+            add:
+            - SYS_PTRACE  # 调试权限
+            - NET_ADMIN   # 网络调试权限
+      
+      # 开发环境存储卷
+      volumes:
+      - name: dev-source
+        hostPath:
+          path: /opt/nova-proxy/src  # 主机源码目录
+          type: DirectoryOrCreate
+      - name: dev-logs
+        emptyDir:
+          sizeLimit: 500Mi
+      - name: dev-cache
+        emptyDir:
+          sizeLimit: 200Mi
+      
+      # 开发环境调度配置
+      nodeSelector:
+        node-type: development  # 调度到开发节点
+      
+      # 开发环境容忍度
+      tolerations:
+      - key: "development"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
+        tolerationSeconds: 600  # 更长的容忍时间
+      
+      # 开发环境 DNS 配置
+      dnsPolicy: ClusterFirst
+      dnsConfig:
+        options:
+        - name: ndots
+          value: "2"
+        - name: edns0
+      
+      # 开发环境终止配置
+      terminationGracePeriodSeconds: 60  # 更长的优雅终止时间
+      
+      # 开发环境主机网络（可选，用于网络调试）
+      # hostNetwork: true
+      # hostPID: true

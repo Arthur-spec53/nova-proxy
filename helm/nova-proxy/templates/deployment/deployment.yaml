@@ -1,0 +1,277 @@
+{{/*
+Nova Proxy Deployment 模板
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "nova-proxy.fullname" . }}
+  namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "nova-proxy.labels" . | nindent 4 }}
+    {{- with .Values.extra.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  annotations:
+    {{- with .Values.deployment.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- with .Values.extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.deployment.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "nova-proxy.selectorLabels" . | nindent 6 }}
+  {{- with .Values.deployment.strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "nova-proxy.selectorLabels" . | nindent 8 }}
+        {{- with .Values.deployment.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extra.labels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # 配置校验和，确保配置变更时重启 Pod
+        checksum/config: {{ include (print $.Template.BasePath "/configmap/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret/secret.yaml") . | sha256sum }}
+        {{- with .Values.deployment.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extra.annotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "nova-proxy.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.rbac.serviceAccount.automountServiceAccountToken }}
+      {{- with .Values.global.securityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.deployment.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.deployment.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
+      {{- with .Values.deployment.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.deployment.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.deployment.hostNetwork }}
+      hostNetwork: true
+      {{- end }}
+      {{- if .Values.deployment.hostPID }}
+      hostPID: true
+      {{- end }}
+      
+      {{- if .Values.extra.initContainers }}
+      initContainers:
+        {{- toYaml .Values.extra.initContainers | nindent 8 }}
+      {{- end }}
+      
+      containers:
+      - name: {{ .Chart.Name }}
+        image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        
+        {{- with .Values.container.command }}
+        command:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.container.args }}
+        args:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        
+        ports:
+        - name: quic
+          containerPort: {{ .Values.container.ports.quic }}
+          protocol: UDP
+        - name: https
+          containerPort: {{ .Values.container.ports.https }}
+          protocol: TCP
+        - name: health
+          containerPort: {{ .Values.container.ports.health }}
+          protocol: TCP
+        - name: metrics
+          containerPort: {{ .Values.container.ports.metrics }}
+          protocol: TCP
+        {{- if .Values.container.env.NOVA_PPROF_ENABLED | eq "true" }}
+        - name: pprof
+          containerPort: {{ .Values.container.ports.pprof }}
+          protocol: TCP
+        {{- end }}
+        
+        env:
+        {{- range $key, $value := .Values.container.env }}
+        - name: {{ $key }}
+          value: {{ $value | quote }}
+        {{- end }}
+        {{- with .Values.container.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.extra.env }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        
+        {{- with .Values.container.envFrom }}
+        envFrom:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        
+        {{- if .Values.healthCheck.livenessProbe.enabled }}
+        livenessProbe:
+          {{- with .Values.healthCheck.livenessProbe.httpGet }}
+          httpGet:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          initialDelaySeconds: {{ .Values.healthCheck.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthCheck.livenessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthCheck.livenessProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthCheck.livenessProbe.failureThreshold }}
+          successThreshold: {{ .Values.healthCheck.livenessProbe.successThreshold }}
+        {{- end }}
+        
+        {{- if .Values.healthCheck.readinessProbe.enabled }}
+        readinessProbe:
+          {{- with .Values.healthCheck.readinessProbe.httpGet }}
+          httpGet:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          initialDelaySeconds: {{ .Values.healthCheck.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthCheck.readinessProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthCheck.readinessProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthCheck.readinessProbe.failureThreshold }}
+          successThreshold: {{ .Values.healthCheck.readinessProbe.successThreshold }}
+        {{- end }}
+        
+        {{- if .Values.healthCheck.startupProbe.enabled }}
+        startupProbe:
+          {{- with .Values.healthCheck.startupProbe.httpGet }}
+          httpGet:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          initialDelaySeconds: {{ .Values.healthCheck.startupProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.healthCheck.startupProbe.periodSeconds }}
+          timeoutSeconds: {{ .Values.healthCheck.startupProbe.timeoutSeconds }}
+          failureThreshold: {{ .Values.healthCheck.startupProbe.failureThreshold }}
+          successThreshold: {{ .Values.healthCheck.startupProbe.successThreshold }}
+        {{- end }}
+        
+        {{- with .Values.container.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        
+        {{- with .Values.container.securityContext }}
+        securityContext:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        
+        {{- with .Values.container.lifecycle }}
+        lifecycle:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        
+        volumeMounts:
+        {{- if .Values.configMap.enabled }}
+        - name: config
+          mountPath: /app/configs
+          readOnly: true
+        {{- end }}
+        {{- if .Values.secret.enabled }}
+        - name: certs
+          mountPath: /app/certs
+          readOnly: true
+        {{- end }}
+        {{- if .Values.storage.persistentVolumeClaim.enabled }}
+        - name: data
+          mountPath: /app/data
+        {{- end }}
+        {{- if .Values.storage.emptyDir.enabled }}
+        - name: tmp
+          mountPath: /tmp/nova
+        - name: logs
+          mountPath: /app/logs
+        - name: cache
+          mountPath: /app/cache
+        {{- end }}
+        {{- with .Values.extra.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      
+      {{- with .Values.extra.containers }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      
+      volumes:
+      {{- if .Values.configMap.enabled }}
+      - name: config
+        configMap:
+          name: {{ include "nova-proxy.fullname" . }}
+          defaultMode: 0644
+      {{- end }}
+      {{- if .Values.secret.enabled }}
+      - name: certs
+        secret:
+          secretName: {{ include "nova-proxy.fullname" . }}-certs
+          defaultMode: 0600
+      {{- end }}
+      {{- if .Values.storage.persistentVolumeClaim.enabled }}
+      - name: data
+        persistentVolumeClaim:
+          claimName: {{ include "nova-proxy.fullname" . }}-data
+      {{- end }}
+      {{- if .Values.storage.emptyDir.enabled }}
+      - name: tmp
+        emptyDir:
+          {{- if .Values.storage.emptyDir.sizeLimit }}
+          sizeLimit: {{ .Values.storage.emptyDir.sizeLimit }}
+          {{- end }}
+          {{- if .Values.storage.emptyDir.medium }}
+          medium: {{ .Values.storage.emptyDir.medium }}
+          {{- end }}
+      - name: logs
+        emptyDir:
+          sizeLimit: 1Gi
+      - name: cache
+        emptyDir:
+          sizeLimit: 500Mi
+          {{- if eq .Values.storage.emptyDir.medium "Memory" }}
+          medium: Memory
+          {{- end }}
+      {{- end }}
+      {{- with .Values.extra.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      
+      {{- with .Values.deployment.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.deployment.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.deployment.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
