@@ -78,24 +78,26 @@
 ```bash
 # 启动交互式管理工具
 ./scripts/nova-manager.sh
-# 或者
-make manager
 ```
 
 ### 🌟 管理工具特性
 
 - **🔍 智能系统检查**: 自动评估硬件资源并推荐最适合的部署方案
-- **🚀 一键部署**: 支持核心、轻量级、完整和开发环境部署
-- **📊 实时监控**: 服务状态、资源使用、日志查看
-- **⚙️ 配置管理**: 可视化配置修改、备份恢复
-- **🛠️ 维护工具**: 性能测试、数据清理、故障排除
+- **🚀 多种部署模式**: 
+  - 核心服务部署 (Nova Server + 基础监控)
+  - 轻量级部署 (最小化资源占用)
+  - 完整部署 (包含完整监控栈)
+  - 生产环境部署 (企业级配置)
+- **📊 实时监控**: 服务状态、资源使用、容器健康检查
+- **⚙️ 服务管理**: 启动、停止、重启、日志查看
+- **🌐 监控面板**: 一键访问 Grafana、Prometheus、Jaeger 等监控工具
 - **📋 保姆级指导**: 每个操作都有详细说明和确认提示
 
 **快速体验**: 查看 [快速入门指南](QUICK_START.md) 或 [详细管理指南](README_MANAGER.md)
 
 ## 🚀 快速开始
 
-### 方法一：使用管理工具 (推荐新手)
+### 方法一：使用管理工具 (推荐)
 
 ```bash
 # 1. 运行系统检查，获取部署建议
@@ -103,16 +105,44 @@ make manager
 
 # 2. 启动管理工具，按提示操作
 ./scripts/nova-manager.sh
+
+# 管理工具菜单选项：
+# 1. 系统检查和环境评估
+# 2. 核心服务部署 (推荐首次使用)
+# 3. 轻量级部署
+# 4. 完整部署 (包含完整监控栈)
+# 5. 生产环境部署
+# 6. 查看服务状态
+# 8. 停止服务
+# 13. 获取监控面板访问地址
 ```
 
-### 方法二：传统部署方式
+### 方法二：直接使用 Docker Compose
 
-#### 前置要求
+```bash
+# 核心服务部署 (推荐)
+docker compose -f docker-compose.dev.yml up -d
 
-- Go 1.22+
-- Docker 20.10+
-- Kubernetes 1.25+
-- Helm 3.8+
+# 轻量级部署
+docker compose -f docker-compose.minimal.yml up -d
+
+# 完整部署
+docker compose up -d
+
+# 查看服务状态
+docker compose ps
+
+# 访问服务
+# Nova Proxy: http://localhost:8080
+# Grafana: http://localhost:3000 (admin/admin)
+# Prometheus: http://localhost:9090
+```
+
+### 前置要求
+
+- Docker 20.10+ 和 Docker Compose
+- 至少 2GB 可用内存
+- 至少 10GB 可用磁盘空间
 
 ### 本地开发
 
@@ -121,37 +151,28 @@ make manager
 git clone https://github.com/Arthur-spec53/nova-proxy.git
 cd nova-proxy
 
-# 安装依赖
-go mod download
+# 使用开发环境配置
+cp .env.example .env
 
-# 生成测试证书
-make certs
+# 启动开发环境
+docker compose -f docker-compose.dev.yml up -d
 
-# 运行测试
-make test
-
-# 编译服务端和客户端
-cd cmd/nova-server && go build .
-cd ../nova-client && go build .
-
-# 启动服务端
-./cmd/nova-server/nova-server
-
-# 启动客户端 (新终端)
-./cmd/nova-client/nova-client
+# 查看日志
+docker compose -f docker-compose.dev.yml logs -f
 ```
 
-### Docker 部署
+### 生产部署
 
 ```bash
-# 构建镜像
-docker build -t nova-proxy:latest .
+# 配置生产环境变量
+cp .env.example .env
+# 编辑 .env 文件，设置域名和密码
 
-# 运行服务端
-docker run -p 8080:8080 -p 8443:8443 nova-proxy:latest server
+# 创建外部网络
+docker network create traefik-public
 
-# 运行客户端
-docker run -p 1080:1080 nova-proxy:latest client
+# 启动生产环境
+docker compose -f docker-compose.prod.yml up -d
 ```
 
 ### Kubernetes 部署
@@ -160,64 +181,61 @@ docker run -p 1080:1080 nova-proxy:latest client
 # 使用 Helm 部署
 helm install nova-proxy ./helm/nova-proxy \
   --namespace nova-proxy \
-  --create-namespace \
-  --values ./helm/nova-proxy/values.yaml
+  --create-namespace
 
-# 或使用原生 Kubernetes 清单
-kubectl apply -f k8s/
+# 或使用 Kubernetes 清单
+kubectl apply -f deployments/k8s/
 ```
 
 ## 📖 配置说明
 
-### 服务端配置 (server.json)
+### 环境变量配置 (.env)
 
-```json
-{
-  "listen_addr": "0.0.0.0:8443",
-  "preshared_key": "your-32-byte-key-here",
-  "log_level": "info",
-  "shaping": {
-    "interval_ms": 50
-  },
-  "upstream": {
-    "servers": [
-      "http://backend1:8080",
-      "http://backend2:8080"
-    ],
-    "load_balancer": "round_robin"
-  },
-  "ssl": {
-    "cert_file": "/etc/ssl/certs/server.crt",
-    "key_file": "/etc/ssl/private/server.key"
-  }
-}
+```bash
+# 基础配置
+BUILD_VERSION=latest
+LOG_LEVEL=info
+ENVIRONMENT=development
+
+# 域名配置 (生产环境)
+NOVA_DOMAIN=localhost
+PROMETHEUS_DOMAIN=localhost
+GRAFANA_DOMAIN=localhost
+JAEGER_DOMAIN=localhost
+ALERTMANAGER_DOMAIN=localhost
+
+# 认证配置
+GRAFANA_ADMIN_PASSWORD=admin123
+REDIS_PASSWORD=redis123
+ELASTICSEARCH_PASSWORD=elastic123
+HTTP_BASIC_AUTH_USER=admin
+HTTP_BASIC_AUTH_PASSWORD=admin123
+
+# 镜像配置
+REGISTRY=
+VERSION=latest
 ```
 
-### 客户端配置 (client.json)
+### Docker Compose 配置文件
 
-```json
-{
-  "listen_addr": "127.0.0.1:1080",
-  "remote_addr": "your-server:8443",
-  "preshared_key": "your-32-byte-key-here",
-  "log_level": "info",
-  "shaping": {
-    "interval_ms": 50,
-    "min_pad_size": 64,
-    "max_pad_size": 1024
-  }
-}
-```
+项目提供了多种部署配置：
 
-### 环境变量
+- `docker-compose.dev.yml` - 开发环境 (Nova Server + 基础监控)
+- `docker-compose.minimal.yml` - 轻量级部署 (最小资源)
+- `docker-compose.yml` - 完整部署 (完整监控栈)
+- `docker-compose.prod.yml` - 生产环境 (企业级配置)
+
+### 主要环境变量
 
 | 变量名 | 描述 | 默认值 |
 |--------|------|--------|
-| `NOVA_CONFIG_FILE` | 配置文件路径 | `server.json`/`client.json` |
-| `NOVA_LOG_LEVEL` | 日志级别 | `info` |
-| `NOVA_PRESHARED_KEY` | 预共享密钥 | - |
-| `NOVA_LISTEN_ADDR` | 监听地址 | `0.0.0.0:8443` |
-| `NOVA_REMOTE_ADDR` | 远程地址 (客户端) | - |
+| `BUILD_VERSION` | 构建版本 | `latest` |
+| `LOG_LEVEL` | 日志级别 | `info` |
+| `ENVIRONMENT` | 运行环境 | `development` |
+| `NOVA_DOMAIN` | Nova Proxy 域名 | `localhost` |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana 管理员密码 | `admin123` |
+| `PROMETHEUS_DOMAIN` | Prometheus 域名 | `localhost` |
+| `GRAFANA_DOMAIN` | Grafana 域名 | `localhost` |
 
 ## 🔧 开发指南
 
@@ -280,22 +298,36 @@ go test -cover ./...
 
 ## 📊 监控和运维
 
+### 服务访问地址
+
+```bash
+# 使用管理工具获取访问地址
+./scripts/nova-manager.sh
+# 选择选项 13: 监控面板访问地址
+
+# 或直接访问以下地址：
+# Nova Proxy 服务: http://localhost:8080
+# Prometheus: http://localhost:9090
+# Grafana: http://localhost:3000 (admin/admin123)
+# Jaeger: http://localhost:16686
+```
+
 ### 健康检查
 
 ```bash
-# 基础健康检查
+# Nova Server 健康检查
 curl http://localhost:8080/health
 
-# 详细健康检查
-curl http://localhost:8080/health/detailed
+# 检查容器状态
+docker compose ps
 
-# 就绪检查
-curl http://localhost:8080/ready
+# 查看服务日志
+docker compose logs nova-server
 ```
 
 ### 指标监控
 
-访问 Prometheus 指标：`http://localhost:9090/metrics`
+访问 Prometheus 指标：`http://localhost:9090`
 
 主要指标：
 - `nova_proxy_connections_total` - 连接总数
@@ -425,40 +457,60 @@ kubectl logs deployment/nova-proxy -n nova-proxy > nova-proxy.log
 
 ### 常见问题
 
-**Q: ASTAT 连接失败**
+**Q: Docker Compose 启动失败**
 ```bash
-# 检查预共享密钥
-echo "检查客户端和服务端的 preshared_key 是否一致"
+# 检查 Docker 和 Docker Compose 版本
+docker --version
+docker compose version
 
-# 检查网络连通性
-telnet server-ip 8443
+# 检查端口占用
+sudo netstat -tlnp | grep :8080
+sudo netstat -tlnp | grep :3000
 
-# 查看详细日志
-NOVA_LOG_LEVEL=debug ./nova-server
+# 清理并重新启动
+docker compose down
+docker compose up -d
 ```
 
-**Q: 流量塑形不工作**
+**Q: 健康检查失败**
 ```bash
-# 检查配置
-cat client.json | jq '.shaping'
+# 检查容器状态
+docker compose ps
 
-# 监控流量模式
-tcpdump -i any -w traffic.pcap host server-ip
+# 查看容器日志
+docker compose logs nova-server
+docker compose logs nova-grafana
 
-# 分析数据包间隔
-wireshark traffic.pcap
+# 检查健康检查脚本
+docker exec nova-server /app/bin/healthcheck.sh
 ```
 
-**Q: 性能问题**
+**Q: 监控服务无法访问**
 ```bash
-# 检查系统资源
-top -p $(pgrep nova-server)
+# 检查服务是否运行
+curl -f http://localhost:8080/health || echo "Nova Server 不可访问"
+curl -f http://localhost:9090/-/healthy || echo "Prometheus 不可访问"
+curl -f http://localhost:3000/api/health || echo "Grafana 不可访问"
 
-# 检查网络延迟
-ping server-ip
+# 检查防火墙设置
+sudo ufw status
 
-# 调整缓冲区大小
-echo 'net.core.rmem_max = 16777216' >> /etc/sysctl.conf
+# 重启服务
+docker compose restart
+```
+
+**Q: 镜像拉取失败**
+```bash
+# 检查网络连接
+ping docker.io
+ping ghcr.io
+
+# 使用本地构建
+docker compose build
+
+# 或修改 .env 文件使用本地镜像
+echo "REGISTRY=" >> .env
+echo "VERSION=latest" >> .env
 ```
 
 ### 性能调优
