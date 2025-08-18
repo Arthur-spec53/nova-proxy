@@ -1,14 +1,12 @@
 # Nova Proxy 生产环境配置
 # 使用方法: docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
-version: '3.8'
-
 services:
   # ============================================================================
   # Nova Proxy 服务器 - 生产配置
   # ============================================================================
   nova-server:
-    image: ${REGISTRY:-ghcr.io}/nova-proxy/server:${VERSION:-latest}
+    image: nova-proxy-nova-server:${VERSION:-latest}
     deploy:
       replicas: 3
       update_config:
@@ -47,7 +45,7 @@ services:
       - nova-network
       - traefik-public
     healthcheck:
-      test: ["/app/bin/healthcheck.sh"]
+      test: ["CMD", "/app/bin/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3

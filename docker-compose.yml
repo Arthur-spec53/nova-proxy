@@ -200,8 +200,8 @@ services:
     hostname: traefik
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "8080:8080"  # Traefik Dashboard
+      - "8000:80"   # 避免与nginx冲突
+      - "8888:8080"  # Traefik Dashboard，避免与nova-server冲突
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro

@@ -91,15 +91,15 @@ metrics:
       - 5.0
 
 # 追踪配置
-tracing:
-  jaeger:
-    samplingServerURL: http://jaeger:14268/api/sampling
-    samplingType: const
-    samplingParam: 1.0
-    localAgentHostPort: jaeger:6831
-    gen128Bit: true
-    propagation: jaeger
-    traceContextHeaderName: uber-trace-id
+# tracing:
+#   jaeger:
+#     samplingServerURL: http://jaeger:14268/api/sampling
+#     samplingType: const
+#     samplingParam: 1.0
+#     localAgentHostPort: jaeger:6831
+#     gen128Bit: true
+#     propagation: jaeger
+#     traceContextHeaderName: uber-trace-id
 
 # 证书解析器（Let's Encrypt）
 certificatesResolvers:
@@ -122,11 +122,11 @@ ping:
 #   prefix: traefik
 
 # 实验性功能
-experimental:
-  plugins:
-    # 可以在这里添加插件配置
-  localPlugins:
-    # 本地插件配置
+# experimental:
+#   plugins:
+#     # 可以在这里添加插件配置
+#   localPlugins:
+#     # 本地插件配置
 
 # 服务发现
 servicesThrottleDuration: 2s
