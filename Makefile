@@ -57,6 +57,133 @@ help: ## 显示帮助信息
 	@echo "  make test           # 运行所有测试"
 	@echo "  make docker-build   # 构建 Docker 镜像"
 	@echo "  make deploy-dev     # 部署到开发环境"
+	@echo "  make system-check   # 检查系统资源并推荐部署方案"
+	@echo "  make deploy-minimal # 轻量级部署"
+
+# ============================================================================
+# 系统检查和部署建议
+# ============================================================================
+
+.PHONY: system-check
+system-check: ## 检查系统资源并推荐合适的部署方案
+	@echo "$(YELLOW)检查系统资源...$(RESET)"
+	@./scripts/system-check.sh
+
+.PHONY: deploy-minimal
+deploy-minimal: ## 轻量级部署（适合低配置环境）
+	@echo "$(YELLOW)启动轻量级部署...$(RESET)"
+	@if [ ! -f .env ]; then \
+		echo "$(BLUE)复制轻量级环境配置...$(RESET)"; \
+		cp .env.minimal .env; \
+	fi
+	@docker compose -f docker-compose.minimal.yml up -d
+	@echo "$(GREEN)轻量级部署完成$(RESET)"
+	@echo "$(CYAN)访问地址:$(RESET)"
+	@echo "  Nova Server: http://localhost:8080"
+	@echo "  健康检查: http://localhost:8081/health"
+	@echo "$(YELLOW)可选启用监控:$(RESET)"
+	@echo "  make enable-monitoring"
+
+.PHONY: deploy-minimal-with-monitoring
+deploy-minimal-with-monitoring: ## 轻量级部署并启用监控
+	@echo "$(YELLOW)启动轻量级部署（含监控）...$(RESET)"
+	@if [ ! -f .env ]; then \
+		echo "$(BLUE)复制轻量级环境配置...$(RESET)"; \
+		cp .env.minimal .env; \
+	fi
+	@docker compose -f docker-compose.minimal.yml --profile monitoring up -d
+	@echo "$(GREEN)轻量级部署（含监控）完成$(RESET)"
+	@echo "$(CYAN)访问地址:$(RESET)"
+	@echo "  Nova Server: http://localhost:8080"
+	@echo "  Prometheus: http://localhost:9091"
+	@echo "  Grafana: http://localhost:3000 (admin/admin123)"
+
+.PHONY: enable-monitoring
+enable-monitoring: ## 为现有轻量级部署启用监控
+	@echo "$(YELLOW)启用监控组件...$(RESET)"
+	@docker compose -f docker-compose.minimal.yml --profile monitoring up -d
+	@echo "$(GREEN)监控组件已启用$(RESET)"
+
+.PHONY: disable-monitoring
+disable-monitoring: ## 禁用监控组件以节省资源
+	@echo "$(YELLOW)禁用监控组件...$(RESET)"
+	@docker compose -f docker-compose.minimal.yml stop prometheus grafana
+	@docker compose -f docker-compose.minimal.yml rm -f prometheus grafana
+	@echo "$(GREEN)监控组件已禁用$(RESET)"
+
+.PHONY: deploy-full
+deploy-full: ## 完整部署（适合高配置环境）
+	@echo "$(YELLOW)启动完整部署...$(RESET)"
+	@if [ ! -f .env ]; then \
+		echo "$(BLUE)复制完整环境配置...$(RESET)"; \
+		cp .env.example .env; \
+	fi
+	@docker compose up -d
+	@echo "$(GREEN)完整部署完成$(RESET)"
+	@echo "$(CYAN)访问地址:$(RESET)"
+	@echo "  Nova Server: http://localhost:8080"
+	@echo "  Prometheus: http://localhost:9091"
+	@echo "  Grafana: http://localhost:3000 (admin/admin123)"
+	@echo "  Jaeger: http://localhost:16686"
+	@echo "  Traefik: http://localhost:8080"
+
+# 管理工具
+.PHONY: manager nova-manager
+manager: nova-manager ## 启动 Nova Proxy 管理工具 (交互式菜单)
+
+nova-manager: ## 启动保姆级管理工具，提供完整的部署和维护功能
+	@echo "$(CYAN)启动 Nova Proxy 管理工具...$(RESET)"
+	@if [ -f "scripts/nova-manager.sh" ]; then \
+		chmod +x scripts/nova-manager.sh && ./scripts/nova-manager.sh; \
+	else \
+		echo "$(RED)错误: 管理脚本不存在$(RESET)"; \
+		echo "请确保 scripts/nova-manager.sh 文件存在"; \
+		exit 1; \
+	fi
+
+.PHONY: uninstall
+uninstall: ## 快速卸载 Nova Proxy (危险操作)
+	@echo "$(RED)⚠️  警告: 此操作将完全删除所有 Nova Proxy 相关的服务和数据！$(RESET)"
+	@echo "如需继续，请使用管理工具进行安全卸载:"
+	@echo "  make manager"
+	@echo "  然后选择选项 23 - 完全卸载服务"
+	@echo ""
+	@read -p "确定要直接执行卸载吗？输入 'UNINSTALL' 确认: " confirm; \
+	if [ "$$confirm" = "UNINSTALL" ]; then \
+		if [ -f "scripts/nova-manager.sh" ]; then \
+			chmod +x scripts/nova-manager.sh; \
+			echo "23" | ./scripts/nova-manager.sh; \
+		else \
+			echo "$(YELLOW)管理脚本不存在，执行基本清理...$(RESET)"; \
+			docker-compose down --remove-orphans || true; \
+			docker system prune -f; \
+		fi; \
+	else \
+		echo "$(GREEN)操作已取消$(RESET)"; \
+	fi
+
+.PHONY: resource-monitor
+resource-monitor: ## 监控Docker容器资源使用情况
+	@echo "$(YELLOW)监控容器资源使用...$(RESET)"
+	@echo "$(CYAN)按 Ctrl+C 退出监控$(RESET)"
+	@docker stats
+
+.PHONY: performance-test
+performance-test: ## 运行性能测试
+	@echo "$(YELLOW)运行性能测试...$(RESET)"
+	@./scripts/performance.sh
+
+.PHONY: deployment-status
+deployment-status: ## 检查部署状态
+	@echo "$(YELLOW)检查部署状态...$(RESET)"
+	@docker compose ps
+	@echo ""
+	@echo "$(CYAN)容器资源使用:$(RESET)"
+	@docker stats --no-stream
+	@echo ""
+	@echo "$(CYAN)系统资源:$(RESET)"
+	@free -h
+	@df -h .
 
 # 清理
 .PHONY: clean

@@ -216,14 +216,14 @@ func handleConnection(conn quic.Session) {
 			log.Logger.Errorf("Copy from stream to target failed: %v", err)
 			metrics.ErrorCount.WithLabelValues("copy_stream_to_target").Inc()
 		}
-		metrics.ThroughputBytes.Add(float64(n))
+		metrics.ThroughputBytes.WithLabelValues("upstream").Add(float64(n))
 	}()
 	n, err := io.Copy(stream, targetConn)
 	if err != nil {
 		log.Logger.Errorf("Copy from target to stream failed: %v", err)
 		metrics.ErrorCount.WithLabelValues("copy_target_to_stream").Inc()
 	}
-	metrics.ThroughputBytes.Add(float64(n))
+	metrics.ThroughputBytes.WithLabelValues("downstream").Add(float64(n))
 }
 
 func generateTLSConfig() (*tls.Config, error) {

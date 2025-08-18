@@ -1,0 +1,90 @@
+# Prometheus 配置文件
+# Nova Proxy 监控配置
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'nova-proxy'
+    environment: 'development'
+
+rule_files:
+  - "rules/*.yml"
+
+scrape_configs:
+  # Nova Proxy 服务器指标
+  - job_name: 'nova-proxy-server'
+    static_configs:
+      - targets: ['nova-server:9090']
+    scrape_interval: 10s
+    metrics_path: '/metrics'
+    scheme: 'http'
+    scrape_timeout: 5s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+
+  # Nova Proxy 健康检查
+  - job_name: 'nova-proxy-health'
+    static_configs:
+      - targets: ['nova-server:8081']
+    scrape_interval: 30s
+    metrics_path: '/health'
+    scheme: 'http'
+    scrape_timeout: 5s
+
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+  # Grafana 监控
+  - job_name: 'grafana'
+    static_configs:
+      - targets: ['grafana:3000']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Redis 监控（如果启用）
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Docker 容器监控
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['host.docker.internal:9323']
+    scrape_interval: 30s
+    metrics_path: '/metrics'
+
+  # Node Exporter（系统监控）
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+    metrics_path: '/metrics'
+
+# 告警管理器配置
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# 远程写入配置（可选）
+# remote_write:
+#   - url: "https://prometheus-remote-write-endpoint"
+#     basic_auth:
+#       username: "username"
+#       password: "password"
+
+# 远程读取配置（可选）
+# remote_read:
+#   - url: "https://prometheus-remote-read-endpoint"
+#     basic_auth:
+#       username: "username"
+#       password: "password"

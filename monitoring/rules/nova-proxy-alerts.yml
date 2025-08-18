@@ -1,0 +1,139 @@
+# Nova Proxy 告警规则
+# Prometheus 告警配置
+
+groups:
+  - name: nova-proxy.rules
+    rules:
+      # 服务可用性告警
+      - alert: NovaProxyDown
+        expr: up{job="nova-proxy-server"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy服务不可用"
+          description: "Nova Proxy服务已停止运行超过1分钟"
+
+      # 高错误率告警
+      - alert: NovaProxyHighErrorRate
+        expr: |
+          (
+            rate(nova_proxy_requests_total{status=~"5.."}[5m]) /
+            rate(nova_proxy_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy错误率过高"
+          description: "Nova Proxy在过去5分钟内的错误率超过5%，当前值: {{ $value | humanizePercentage }}"
+
+      # 高延迟告警
+      - alert: NovaProxyHighLatency
+        expr: |
+          histogram_quantile(0.95,
+            rate(nova_proxy_request_duration_seconds_bucket[5m])
+          ) > 1.0
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy响应延迟过高"
+          description: "Nova Proxy 95%分位延迟超过1秒，当前值: {{ $value }}s"
+
+      # 连接数过高告警
+      - alert: NovaProxyHighConnections
+        expr: nova_proxy_active_connections > 1000
+        for: 2m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy活跃连接数过高"
+          description: "Nova Proxy活跃连接数超过1000，当前值: {{ $value }}"
+
+      # CPU使用率过高告警
+      - alert: NovaProxyHighCPU
+        expr: |
+          (
+            rate(process_cpu_seconds_total{job="nova-proxy-server"}[5m]) * 100
+          ) > 80
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy CPU使用率过高"
+          description: "Nova Proxy CPU使用率超过80%，当前值: {{ $value | humanizePercentage }}"
+
+      # 内存使用率过高告警
+      - alert: NovaProxyHighMemory
+        expr: |
+          (
+            process_resident_memory_bytes{job="nova-proxy-server"} /
+            (1024 * 1024 * 1024)
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy内存使用过高"
+          description: "Nova Proxy内存使用超过2GB，当前值: {{ $value }}GB"
+
+      # 磁盘空间不足告警
+      - alert: NovaProxyLowDiskSpace
+        expr: |
+          (
+            (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) /
+            node_filesystem_size_bytes{mountpoint="/"}
+          ) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "磁盘空间不足"
+          description: "根分区磁盘使用率超过85%，当前值: {{ $value | humanizePercentage }}"
+
+      # QUIC连接失败率过高
+      - alert: NovaProxyQUICConnectionFailures
+        expr: |
+          (
+            rate(nova_proxy_quic_connection_failures_total[5m]) /
+            rate(nova_proxy_quic_connection_attempts_total[5m])
+          ) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+          service: nova-proxy
+          protocol: quic
+        annotations:
+          summary: "QUIC连接失败率过高"
+          description: "QUIC连接失败率超过10%，当前值: {{ $value | humanizePercentage }}"
+
+      # 健康检查失败
+      - alert: NovaProxyHealthCheckFailed
+        expr: nova_proxy_health_check_status != 1
+        for: 2m
+        labels:
+          severity: critical
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy健康检查失败"
+          description: "Nova Proxy健康检查连续失败超过2分钟"
+
+      # 证书即将过期
+      - alert: NovaProxyCertificateExpiringSoon
+        expr: |
+          (nova_proxy_certificate_expiry_timestamp - time()) / (24 * 3600) < 30
+        for: 1h
+        labels:
+          severity: warning
+          service: nova-proxy
+        annotations:
+          summary: "Nova Proxy证书即将过期"
+          description: "Nova Proxy TLS证书将在{{ $value }}天内过期"

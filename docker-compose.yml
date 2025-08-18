@@ -1,8 +1,6 @@
 # Nova Proxy Docker Compose 配置
 # 用于本地开发、测试和演示环境
 
-version: '3.8'
-
 services:
   # ============================================================================
   # Nova Proxy 服务器
@@ -26,7 +24,7 @@ services:
       - "9090:9090"   # Prometheus 指标端口
     volumes:
       - ./configs:/app/configs:ro
-      - ./profiles:/app/profiles:ro
+      - ./profiles:/opt/nova-proxy/profiles:ro
       - nova-logs:/app/logs
       - nova-data:/app/data
       - nova-certs:/app/certs
@@ -39,7 +37,7 @@ services:
     networks:
       - nova-network
     healthcheck:
-      test: ["/app/bin/healthcheck.sh"]
+      test: ["CMD", "/app/bin/healthcheck.sh"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -65,6 +63,7 @@ services:
     restart: "no"
     volumes:
       - ./configs:/app/configs:ro
+      - ./profiles:/opt/nova-proxy/profiles:ro
       - nova-logs:/app/logs
     environment:
       - NOVA_SERVER_ADDR=nova-server:8080

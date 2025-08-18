@@ -1,0 +1,141 @@
+# Nova Proxy 轻量级配置
+# 专为低配置环境设计，仅包含核心服务和基础监控
+
+services:
+  # ============================================================================
+  # Nova Proxy 服务器 (优化配置)
+  # ============================================================================
+  nova-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-dev}
+        BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: nova-server
+    hostname: nova-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"   # QUIC 端口
+      - "8443:8443"   # HTTPS 端口
+      - "8081:8081"   # 健康检查端口
+      - "9090:9090"   # Prometheus 指标端口
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./profiles:/opt/nova-proxy/profiles:ro
+      - nova-logs:/app/logs
+      - nova-data:/app/data
+    environment:
+      - NOVA_LOG_LEVEL=${LOG_LEVEL:-warn}  # 减少日志输出
+      - NOVA_METRICS_ENABLED=${METRICS_ENABLED:-false}  # 可选禁用指标
+      - NOVA_HEALTH_CHECK_ENABLED=true
+      - GOMAXPROCS=1  # 限制CPU使用
+      - GOGC=200      # 减少GC频率，节省CPU
+    networks:
+      - nova-network
+    healthcheck:
+      test: ["CMD", "/app/bin/healthcheck.sh"]
+      interval: 60s   # 延长健康检查间隔
+      timeout: 5s
+      retries: 2
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 256M  # 限制内存使用
+          cpus: '0.5'   # 限制CPU使用
+        reservations:
+          memory: 128M
+          cpus: '0.25'
+
+  # ============================================================================
+  # 轻量级监控 (仅在需要时启用)
+  # ============================================================================
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: nova-prometheus
+    hostname: prometheus
+    restart: unless-stopped
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'  # 减少数据保留时间
+      - '--storage.tsdb.retention.size=1GB' # 限制存储大小
+      - '--web.enable-lifecycle'
+    networks:
+      - nova-network
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+    profiles:
+      - monitoring  # 仅在指定profile时启动
+
+  # ============================================================================
+  # 基础可视化 (可选)
+  # ============================================================================
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: nova-grafana
+    hostname: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin123}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_ANALYTICS_REPORTING_ENABLED=false  # 禁用分析报告
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false  # 禁用更新检查
+      - GF_SNAPSHOTS_EXTERNAL_ENABLED=false   # 禁用外部快照
+    networks:
+      - nova-network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    profiles:
+      - monitoring  # 仅在指定profile时启动
+
+# ============================================================================
+# 网络配置
+# ============================================================================
+networks:
+  nova-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# ============================================================================
+# 数据卷配置
+# ============================================================================
+volumes:
+  nova-logs:
+    driver: local
+  nova-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

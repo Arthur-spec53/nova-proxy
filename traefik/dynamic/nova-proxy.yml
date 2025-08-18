@@ -1,0 +1,240 @@
+# Traefik 动态配置
+# Nova Proxy 服务路由和中间件配置
+
+http:
+  # 路由配置
+  routers:
+    # Nova Proxy API 路由
+    nova-proxy-api:
+      rule: "Host(`nova-proxy.local`) || Host(`localhost`) && PathPrefix(`/api`)"
+      service: nova-proxy-service
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - nova-proxy-auth
+        - nova-proxy-ratelimit
+        - nova-proxy-headers
+      tls:
+        certResolver: letsencrypt
+
+    # Nova Proxy WebSocket 路由
+    nova-proxy-ws:
+      rule: "Host(`nova-proxy.local`) || Host(`localhost`) && PathPrefix(`/ws`)"
+      service: nova-proxy-service
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - nova-proxy-headers
+      tls:
+        certResolver: letsencrypt
+
+    # Grafana 路由
+    grafana:
+      rule: "Host(`grafana.nova-proxy.local`) || Host(`grafana.localhost`)"
+      service: grafana-service
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - grafana-headers
+      tls:
+        certResolver: letsencrypt
+
+    # Prometheus 路由
+    prometheus:
+      rule: "Host(`prometheus.nova-proxy.local`) || Host(`prometheus.localhost`)"
+      service: prometheus-service
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - prometheus-auth
+        - prometheus-headers
+      tls:
+        certResolver: letsencrypt
+
+    # Jaeger 路由
+    jaeger:
+      rule: "Host(`jaeger.nova-proxy.local`) || Host(`jaeger.localhost`)"
+      service: jaeger-service
+      entryPoints:
+        - web
+        - websecure
+      middlewares:
+        - jaeger-headers
+      tls:
+        certResolver: letsencrypt
+
+  # 服务配置
+  services:
+    # Nova Proxy 服务
+    nova-proxy-service:
+      loadBalancer:
+        servers:
+          - url: "http://nova-server:8080"
+        healthCheck:
+          path: "/health"
+          interval: "30s"
+          timeout: "5s"
+          scheme: "http"
+        sticky:
+          cookie:
+            name: "nova-proxy-server"
+            secure: true
+            httpOnly: true
+
+    # Grafana 服务
+    grafana-service:
+      loadBalancer:
+        servers:
+          - url: "http://grafana:3000"
+        healthCheck:
+          path: "/api/health"
+          interval: "30s"
+          timeout: "5s"
+
+    # Prometheus 服务
+    prometheus-service:
+      loadBalancer:
+        servers:
+          - url: "http://prometheus:9090"
+        healthCheck:
+          path: "/-/healthy"
+          interval: "30s"
+          timeout: "5s"
+
+    # Jaeger 服务
+    jaeger-service:
+      loadBalancer:
+        servers:
+          - url: "http://jaeger:16686"
+        healthCheck:
+          path: "/"
+          interval: "30s"
+          timeout: "5s"
+
+  # 中间件配置
+  middlewares:
+    # Nova Proxy 认证中间件
+    nova-proxy-auth:
+      basicAuth:
+        users:
+          - "admin:$2y$10$2b2cu/0P6dvFRlm1xlTrqOZuHGU4d8YhGGz8VzxLGGz8VzxLGGz8V"  # admin:admin
+        realm: "Nova Proxy API"
+        removeHeader: true
+
+    # Nova Proxy 限流中间件
+    nova-proxy-ratelimit:
+      rateLimit:
+        average: 100
+        period: "1m"
+        burst: 200
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+
+    # Nova Proxy 安全头中间件
+    nova-proxy-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+          X-XSS-Protection: "1; mode=block"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Content-Security-Policy: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:;"
+        sslRedirect: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+
+    # Grafana 头中间件
+    grafana-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "SAMEORIGIN"
+          X-Content-Type-Options: "nosniff"
+        sslRedirect: true
+
+    # Prometheus 认证中间件
+    prometheus-auth:
+      basicAuth:
+        users:
+          - "prometheus:$2y$10$2b2cu/0P6dvFRlm1xlTrqOZuHGU4d8YhGGz8VzxLGGz8VzxLGGz8V"  # prometheus:prometheus
+        realm: "Prometheus Monitoring"
+
+    # Prometheus 头中间件
+    prometheus-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "DENY"
+          X-Content-Type-Options: "nosniff"
+        sslRedirect: true
+
+    # Jaeger 头中间件
+    jaeger-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Frame-Options: "SAMEORIGIN"
+          X-Content-Type-Options: "nosniff"
+        sslRedirect: true
+
+    # CORS 中间件
+    cors:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        accessControlAllowOriginList:
+          - "https://nova-proxy.local"
+          - "https://grafana.nova-proxy.local"
+          - "https://localhost"
+        accessControlAllowHeaders:
+          - "*"
+        accessControlExposeHeaders:
+          - "*"
+        accessControlAllowCredentials: true
+        accessControlMaxAge: 100
+        addVaryHeader: true
+
+# TLS 配置
+tls:
+  options:
+    default:
+      sslProtocols:
+        - "TLSv1.2"
+        - "TLSv1.3"
+      cipherSuites:
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_RSA_WITH_AES_128_GCM_SHA256"
+      curvePreferences:
+        - "CurveP521"
+        - "CurveP384"
+      minVersion: "VersionTLS12"
+      maxVersion: "VersionTLS13"
+
+# TCP 路由（如果需要）
+tcp:
+  routers: {}
+  services: {}
+
+# UDP 路由（如果需要）
+udp:
+  routers: {}
+  services: {}

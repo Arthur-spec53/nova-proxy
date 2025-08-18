@@ -4,7 +4,7 @@
 # ============================================================================
 # 构建阶段 - 编译 Go 应用
 # ============================================================================
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # 设置构建参数
 ARG BUILD_VERSION=dev
@@ -24,12 +24,11 @@ RUN apk add --no-cache \
 # 设置工作目录
 WORKDIR /build
 
-# 复制 go mod 文件并下载依赖（利用 Docker 缓存层）
-COPY go.mod go.sum ./
-RUN go mod download && go mod verify
-
-# 复制源代码
+# 复制源代码（包括本地依赖）
 COPY . .
+
+# 下载依赖并验证
+RUN go mod download && go mod verify
 
 # 构建应用程序
 RUN CGO_ENABLED=${CGO_ENABLED} GOOS=${GOOS} GOARCH=${GOARCH} go build \
@@ -97,6 +96,7 @@ COPY --from=builder --chown=nova:nova /build/nova-client /app/bin/
 # 复制配置文件
 COPY --chown=nova:nova configs/ /app/configs/
 COPY --chown=nova:nova profiles/ /app/profiles/
+COPY --chown=nova:nova monitoring/ /app/monitoring/
 
 # 复制健康检查脚本
 COPY --chown=nova:nova <<'EOF' /app/bin/healthcheck.sh
@@ -189,7 +189,7 @@ CMD ["nova-server", "--config", "/app/configs/server.json", "--debug"]
 # ============================================================================
 # 调试阶段 - 包含调试工具的镜像
 # ============================================================================
-FROM golang:1.21-alpine AS debug
+FROM golang:1.23-alpine AS debug
 
 # 安装调试工具
 RUN apk add --no-cache \
