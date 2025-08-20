@@ -95,7 +95,6 @@ COPY --from=builder --chown=nova:nova /build/nova-client /app/bin/
 
 # 复制配置文件
 COPY --chown=nova:nova configs/ /app/configs/
-COPY --chown=nova:nova profiles/ /app/profiles/
 COPY --chown=nova:nova monitoring/ /app/monitoring/
 
 # 复制健康检查脚本
@@ -226,7 +225,6 @@ RUN CGO_ENABLED=0 go build -gcflags="-N -l" -o /app/bin/nova-client-debug ./cmd/
 
 # 复制配置文件
 COPY --chown=nova:nova configs/ /app/configs/
-COPY --chown=nova:nova profiles/ /app/profiles/
 
 WORKDIR /app
 USER nova
