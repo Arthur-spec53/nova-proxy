@@ -179,6 +179,9 @@ COPY --from=builder /usr/local/go/bin/go /usr/local/bin/
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}" GOROOT="/usr/local/go"
 
+# 安装 Air 热重载工具 (使用兼容Go 1.21的版本)
+    RUN go install github.com/air-verse/air@v1.52.3
+
 # 切换回 nova 用户
 USER nova
 
