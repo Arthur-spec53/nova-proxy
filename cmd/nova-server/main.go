@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"nova-proxy/internal/config"
-	"nova-proxy/internal/metrics"
+	"nova-proxy/internal/monitoring"
 	"nova-proxy/internal/protocol"
 	"nova-proxy/internal/shaping"
 	"nova-proxy/internal/transport"
@@ -31,6 +31,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+var monitoringInstance *monitoring.MonitoringIntegration
+
 func main() {
 	generateDefaultConfig()
 
@@ -40,6 +42,12 @@ func main() {
 	}
 
 	log.SetLevel(cfg.LogLevel)
+
+	// Initialize monitoring
+	monitoringConfig := &monitoring.Config{
+		Enabled: true,
+	}
+	monitoringInstance = monitoring.NewMonitoringIntegration(monitoringConfig)
 
 	var profile *shaping.Profile
 	profilePath := cfg.ShapingProfile
@@ -181,13 +189,19 @@ func main() {
 func handleConnection(conn quic.Session) {
 	defer conn.Close(nil)
 
-	metrics.ActiveConnections.Inc()
-	defer metrics.ActiveConnections.Dec()
+	if monitoringInstance != nil {
+		metrics := monitoringInstance.GetMetrics()
+		metrics.ActiveConnections.Inc()
+		defer metrics.ActiveConnections.Dec()
+	}
 
 	stream, err := conn.AcceptStream()
 	if err != nil {
 		log.Logger.Errorf("Failed to accept stream: %v", err)
-		metrics.ErrorCount.WithLabelValues("accept_stream").Inc()
+		if monitoringInstance != nil {
+			metrics := monitoringInstance.GetMetrics()
+			metrics.ErrorCount.WithLabelValues("accept_stream", "server").Inc()
+		}
 		return
 	}
 	defer stream.Close()
@@ -195,7 +209,10 @@ func handleConnection(conn quic.Session) {
 	frame, err := protocol.Decode(stream)
 	if err != nil {
 		log.Logger.Warnf("Failed to decode protocol frame: %v", err)
-		metrics.ErrorCount.WithLabelValues("decode_frame").Inc()
+		if monitoringInstance != nil {
+			metrics := monitoringInstance.GetMetrics()
+			metrics.ErrorCount.WithLabelValues("decode_frame", "server").Inc()
+		}
 		return
 	}
 
@@ -203,7 +220,10 @@ func handleConnection(conn quic.Session) {
 	targetConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
 	if err != nil {
 		log.Logger.Errorf("Failed to connect to target %s: %v", targetAddr, err)
-		metrics.ErrorCount.WithLabelValues("dial_target").Inc()
+		if monitoringInstance != nil {
+			metrics := monitoringInstance.GetMetrics()
+			metrics.ErrorCount.WithLabelValues("dial_target", "server").Inc()
+		}
 		return
 	}
 	defer targetConn.Close()
@@ -214,16 +234,28 @@ func handleConnection(conn quic.Session) {
 		n, err := io.Copy(targetConn, stream)
 		if err != nil {
 			log.Logger.Errorf("Copy from stream to target failed: %v", err)
-			metrics.ErrorCount.WithLabelValues("copy_stream_to_target").Inc()
+			if monitoringInstance != nil {
+				metrics := monitoringInstance.GetMetrics()
+				metrics.ErrorCount.WithLabelValues("copy_stream_to_target", "server").Inc()
+			}
 		}
-		metrics.ThroughputBytes.WithLabelValues("upstream").Add(float64(n))
+		if monitoringInstance != nil {
+			metrics := monitoringInstance.GetMetrics()
+			metrics.ThroughputBytes.WithLabelValues("upstream").Add(float64(n))
+		}
 	}()
 	n, err := io.Copy(stream, targetConn)
 	if err != nil {
 		log.Logger.Errorf("Copy from target to stream failed: %v", err)
-		metrics.ErrorCount.WithLabelValues("copy_target_to_stream").Inc()
+		if monitoringInstance != nil {
+			metrics := monitoringInstance.GetMetrics()
+			metrics.ErrorCount.WithLabelValues("copy_target_to_stream", "server").Inc()
+		}
 	}
-	metrics.ThroughputBytes.WithLabelValues("downstream").Add(float64(n))
+	if monitoringInstance != nil {
+		metrics := monitoringInstance.GetMetrics()
+		metrics.ThroughputBytes.WithLabelValues("downstream").Add(float64(n))
+	}
 }
 
 func generateTLSConfig() (*tls.Config, error) {
